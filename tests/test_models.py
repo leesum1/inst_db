@@ -14,8 +14,6 @@ from inst_db.api import InstructionDB
 from inst_db.models.instruction import (
     Instruction,
     RegisterDependency,
-    MemoryOperation,
-    MemoryOperationType,
 )
 
 
@@ -113,65 +111,6 @@ class TestInstructionDB:
                 is_dst=False,
             )
 
-    def test_add_memory_operation(self, temp_db):
-        """Test adding memory operations."""
-        instr = temp_db.add_instruction(
-            pc=0x1000,
-            instruction_code=bytes.fromhex("20000101aa"),
-            sequence_id=1,
-        )
-        
-        mem_op = temp_db.add_memory_operation(
-            sequence_id=instr.sequence_id,
-            operation_type="READ",
-            virtual_address=0x7fff0000,
-            physical_address=0x3fff0000,
-            data_content=b'\x01\x02\x03\x04',
-            data_length=4,
-        )
-        
-        assert mem_op.instruction_id == instr.sequence_id
-        assert mem_op.operation_type == MemoryOperationType.READ
-        assert mem_op.virtual_address == 0x7fff0000
-        assert mem_op.physical_address == 0x3fff0000
-        assert mem_op.data_length == 4
-
-    def test_add_memory_operation_infer_length(self, temp_db):
-        """Test memory operation with inferred data length."""
-        instr = temp_db.add_instruction(
-            pc=0x1000,
-            instruction_code=bytes.fromhex("20000101aa"),
-            sequence_id=1,
-        )
-        
-        data = b'\x01\x02\x03\x04'
-        mem_op = temp_db.add_memory_operation(
-            sequence_id=instr.sequence_id,
-            operation_type="WRITE",
-            virtual_address=0x7fff0000,
-            physical_address=0x3fff0000,
-            data_content=data,
-        )
-        
-        assert mem_op.data_length == len(data)
-
-    def test_add_memory_operation_invalid_type(self, temp_db):
-        """Test memory operation with invalid operation type."""
-        instr = temp_db.add_instruction(
-            pc=0x1000,
-            instruction_code=bytes.fromhex("20000101aa"),
-            sequence_id=1,
-        )
-        
-        with pytest.raises(ValueError):
-            temp_db.add_memory_operation(
-                sequence_id=instr.sequence_id,
-                operation_type="INVALID",
-                virtual_address=0x7fff0000,
-                physical_address=0x3fff0000,
-                data_length=4,
-            )
-
     def test_get_register_dependencies(self, temp_db):
         """Test retrieving register dependencies."""
         instr = temp_db.add_instruction(
@@ -195,32 +134,6 @@ class TestInstructionDB:
         
         deps = temp_db.get_register_dependencies(instr.sequence_id)
         assert len(deps) == 2
-
-    def test_get_memory_operations(self, temp_db):
-        """Test retrieving memory operations."""
-        instr = temp_db.add_instruction(
-            pc=0x1000,
-            instruction_code=bytes.fromhex("20000101aa"),
-            sequence_id=1,
-        )
-        
-        temp_db.add_memory_operation(
-            sequence_id=instr.sequence_id,
-            operation_type="READ",
-            virtual_address=0x7fff0000,
-            physical_address=0x3fff0000,
-            data_length=4,
-        )
-        temp_db.add_memory_operation(
-            sequence_id=instr.sequence_id,
-            operation_type="WRITE",
-            virtual_address=0x7fff0004,
-            physical_address=0x3fff0004,
-            data_length=8,
-        )
-        
-        ops = temp_db.get_memory_operations(instr.sequence_id)
-        assert len(ops) == 2
 
     def test_get_instruction_trace(self, temp_db):
         """Test getting complete execution trace."""
@@ -350,20 +263,6 @@ class TestDisassembly:
         # For add instruction, x0 is both read and written
         assert len(src_regs) > 0, "Expected at least one source register"
         assert len(dst_regs) > 0, "Expected at least one destination register"
-
-    def test_automatic_memory_extraction(self, temp_db):
-        """Test that memory operations are automatically extracted."""
-        # ldr x3, [sp]
-        instr = temp_db.add_instruction(
-            pc=0x1000,
-            instruction_code=bytes.fromhex("e30340f9"),
-            sequence_id=1,
-        )
-
-        ops = temp_db.get_memory_operations(instr.sequence_id)
-        assert len(ops) == 1, "Expected one memory operation"
-        assert ops[0].operation_type == MemoryOperationType.READ
-        assert ops[0].data_length > 0
 
     def test_implicit_registers_extraction(self, temp_db):
         """Test that implicit register operations are extracted."""

@@ -34,22 +34,8 @@ inst_db/
 - `is_src` (BOOLEAN)
 - `is_dst` (BOOLEAN)
 
-### memory_operations
-- `id` (INTEGER, PK, AUTOINCREMENT)
-- `instruction_id` (INTEGER, FK -> instructions.sequence_id, INDEX)
-- `operation_type` (ENUM: READ/WRITE)
-- `virtual_address` (TEXT, hex string, INDEX)
-- `physical_address` (TEXT, hex string)
-- `base_reg` (TEXT, nullable)
-- `index_reg` (TEXT, nullable)
-- `displacement` (INTEGER)
-- `index_scale` (INTEGER)
-- `data_content` (BLOB, nullable)
-- `data_length` (INTEGER)
-
 关系说明：
 - `instructions` 1:N `register_dependencies`
-- `instructions` 1:N `memory_operations`
 
 ## 统一插入接口
 
@@ -69,14 +55,6 @@ db.add_register_dependency(
   register_name="x0",
   is_src=True,
   is_dst=False,
-)
-
-db.add_memory_operation(
-  sequence_id=instr.sequence_id,
-  operation_type="READ",
-  virtual_address=0x7fff0000,
-  physical_address=0x3fff0000,
-  data_length=4,
 )
 ```
 

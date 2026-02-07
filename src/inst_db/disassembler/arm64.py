@@ -12,7 +12,6 @@ try:
         CS_MODE_ARM,
         CS_OP_REG,
         CS_OP_FP,
-        CS_OP_MEM,
         CS_AC_READ,
         CS_AC_WRITE,
     )
@@ -33,19 +32,9 @@ class DisassemblyResult:
     full_text: str  # "mnemonic operands"
     regs_read: Set[str]  # 隐式和显式读取的寄存器
     regs_write: Set[str]  # 隐式和显式写入的寄存器
-    mem_accesses: List["MemoryAccess"]  # 内存访问（读/写）
 
 
-@dataclass
-class MemoryAccess:
-    """Memory access information extracted from Capstone operands."""
 
-    operation: str  # "READ" or "WRITE"
-    size: int  # Access size in bytes
-    base_reg: Optional[str]
-    index_reg: Optional[str]
-    index_scale: int
-    displacement: int
 
 
 class ARM64Disassembler:
@@ -87,19 +76,6 @@ class ARM64Disassembler:
             # 通过分析操作数来提取寄存器依赖
             regs_read = set()
             regs_write = set()
-            mem_accesses = []
-
-            def infer_mem_size(access_type: str) -> int:
-                for op in instr.operands:
-                    if op.type == CS_OP_REG or op.type == CS_OP_FP:
-                        reg_name = normalize_reg_name(self.cs.reg_name(op.reg))
-                        if not reg_name:
-                            continue
-                        if access_type == "READ" and (op.access & CS_AC_WRITE):
-                            return self._reg_size_bytes(reg_name)
-                        if access_type == "WRITE" and (op.access & CS_AC_READ):
-                            return self._reg_size_bytes(reg_name)
-                return 0
 
             for operand in instr.operands:
                 # 处理寄存器操作数（整数寄存器和浮点寄存器）
@@ -115,47 +91,6 @@ class ARM64Disassembler:
                     if access & CS_AC_WRITE:
                         regs_write.add(reg_name)
 
-                # 处理内存操作数
-                if operand.type == CS_OP_MEM:
-                    access = operand.access
-                    base_reg = (
-                        normalize_reg_name(self.cs.reg_name(operand.mem.base))
-                        if operand.mem.base
-                        else None
-                    )
-                    index_reg = (
-                        normalize_reg_name(self.cs.reg_name(operand.mem.index))
-                        if operand.mem.index
-                        else None
-                    )
-                    displacement = operand.mem.disp
-                    index_scale = getattr(operand.mem, "scale", 1)
-
-                    if access & CS_AC_READ:
-                        size = infer_mem_size("READ")
-                        mem_accesses.append(
-                            MemoryAccess(
-                                operation="READ",
-                                size=size,
-                                base_reg=base_reg,
-                                index_reg=index_reg,
-                                index_scale=index_scale,
-                                displacement=displacement,
-                            )
-                        )
-                    if access & CS_AC_WRITE:
-                        size = infer_mem_size("WRITE")
-                        mem_accesses.append(
-                            MemoryAccess(
-                                operation="WRITE",
-                                size=size,
-                                base_reg=base_reg,
-                                index_reg=index_reg,
-                                index_scale=index_scale,
-                                displacement=displacement,
-                            )
-                        )
-
             return DisassemblyResult(
                 address=instr.address,
                 instruction_bytes=instruction_bytes,
@@ -164,7 +99,6 @@ class ARM64Disassembler:
                 full_text=full_text,
                 regs_read=regs_read,
                 regs_write=regs_write,
-                mem_accesses=mem_accesses,
             )
         except Exception as e:
             print(f"Error disassembling {instruction_bytes.hex()}: {e}")
@@ -191,19 +125,6 @@ class ARM64Disassembler:
                 # 通过分析操作数来提取寄存器依赖
                 regs_read = set()
                 regs_write = set()
-                mem_accesses = []
-
-                def infer_mem_size(access_type: str) -> int:
-                    for op in instr.operands:
-                        if op.type == CS_OP_REG or op.type == CS_OP_FP:
-                            reg_name = normalize_reg_name(self.cs.reg_name(op.reg))
-                            if not reg_name:
-                                continue
-                            if access_type == "READ" and (op.access & CS_AC_WRITE):
-                                return self._reg_size_bytes(reg_name)
-                            if access_type == "WRITE" and (op.access & CS_AC_READ):
-                                return self._reg_size_bytes(reg_name)
-                    return 0
 
                 for operand in instr.operands:
                     # 处理寄存器操作数（整数寄存器和浮点寄存器）
@@ -218,46 +139,6 @@ class ARM64Disassembler:
                         if access & CS_AC_WRITE:
                             regs_write.add(reg_name)
 
-                    if operand.type == CS_OP_MEM:
-                        access = operand.access
-                        base_reg = (
-                            normalize_reg_name(self.cs.reg_name(operand.mem.base))
-                            if operand.mem.base
-                            else None
-                        )
-                        index_reg = (
-                            normalize_reg_name(self.cs.reg_name(operand.mem.index))
-                            if operand.mem.index
-                            else None
-                        )
-                        displacement = operand.mem.disp
-                        index_scale = getattr(operand.mem, "scale", 1)
-
-                        if access & CS_AC_READ:
-                            size = infer_mem_size("READ")
-                            mem_accesses.append(
-                                MemoryAccess(
-                                    operation="READ",
-                                    size=size,
-                                    base_reg=base_reg,
-                                    index_reg=index_reg,
-                                    index_scale=index_scale,
-                                    displacement=displacement,
-                                )
-                            )
-                        if access & CS_AC_WRITE:
-                            size = infer_mem_size("WRITE")
-                            mem_accesses.append(
-                                MemoryAccess(
-                                    operation="WRITE",
-                                    size=size,
-                                    base_reg=base_reg,
-                                    index_reg=index_reg,
-                                    index_scale=index_scale,
-                                    displacement=displacement,
-                                )
-                            )
-
                 results.append(
                     DisassemblyResult(
                         address=instr.address,
@@ -271,13 +152,14 @@ class ARM64Disassembler:
                         full_text=full_text,
                         regs_read=regs_read,
                         regs_write=regs_write,
-                        mem_accesses=mem_accesses,
                     )
                 )
         except Exception as e:
             print(f"Error disassembling multiple instructions: {e}")
 
         return results
+
+
 
     @staticmethod
     def bytes_to_hex(data: bytes) -> str:
@@ -288,17 +170,3 @@ class ARM64Disassembler:
     def hex_to_bytes(hex_str: str) -> bytes:
         """Convert hex string to bytes."""
         return bytes.fromhex(hex_str)
-
-    @staticmethod
-    def _reg_size_bytes(reg_name: str) -> int:
-        if reg_name.startswith("w"):
-            return 4
-        if reg_name.startswith("x") or reg_name == "sp":
-            return 8
-        if reg_name.startswith("s"):
-            return 4
-        if reg_name.startswith("d"):
-            return 8
-        if reg_name.startswith("q") or reg_name.startswith("v"):
-            return 16
-        return 0

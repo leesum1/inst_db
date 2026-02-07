@@ -66,9 +66,8 @@ tmp/*.out
 tmp/qsort_demo
 tmp/*.db
 
-# uv
+# uv virtual environment (lock file should be committed)
 .venv/
-uv.lock
 .vscode-ctags
 trace_in_asm.log
 

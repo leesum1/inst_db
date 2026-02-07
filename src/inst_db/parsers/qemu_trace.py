@@ -247,5 +247,7 @@ class TraceImporter:
                     print(f"Warning: Failed to import instruction at PC={pc:#x}: {e}")
                     continue
         
+        db.db_manager.save_to_file(self.db_path)
+        
         print(f"Successfully imported {count} instructions")
         return count
