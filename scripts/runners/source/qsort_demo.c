@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
 static void swap_int(int *a, int *b) {
     int tmp = *a;
@@ -38,8 +40,14 @@ static int checksum(const int *arr, int size) {
 }
 
 int main(void) {
-    int data[] = {9, 2, 7, 4, 3, 8, 1, 6, 5, 0, 12, 11, 10, 15, 14, 13};
-    int size = (int)(sizeof(data) / sizeof(data[0]));
+    enum { DATA_SIZE = 100 };
+    int data[DATA_SIZE];
+    int size = DATA_SIZE;
+
+    srand((unsigned int)time(NULL));
+    for (int i = 0; i < size; i++) {
+        data[i] = rand() % 1000;
+    }
 
     quicksort(data, 0, size - 1);
 

@@ -94,6 +94,66 @@ python scripts/runners/run_qemu_trace.py qsort --no-stats
 - `--no-import` - 跳过导入到数据库
 - `--no-stats` - 跳过打印统计信息
 
+## Web UI 可视化
+
+项目提供两种可视化方案：
+
+### 1. Flask Web UI（当前版本）
+基于 Flask + HTML/JavaScript 的 Web 界面，功能完整。
+
+```bash
+# 启动 Web UI
+python start_web_ui.py
+
+# 访问 http://127.0.0.1:5000
+```
+
+详见：[WEB_UI_IMPLEMENTATION.md](WEB_UI_IMPLEMENTATION.md)
+
+### 2. 纯 Python UI 框架（推荐）
+使用纯 Python 编写的 UI 框架，无需编写 HTML/JavaScript。
+
+**🏆 推荐：Streamlit** - 数据可视化专用框架
+```bash
+# 安装
+pip install streamlit
+
+# 运行示例
+streamlit run streamlit_demo.py
+
+# 访问 http://localhost:8501
+```
+
+**其他选择：**
+- **Gradio** - ML 应用友好
+- **NiceGUI** - 现代美观界面
+
+**快速测试所有框架：**
+```bash
+# 列出可用框架
+python test_frameworks.py --list
+
+# 测试 Streamlit
+python test_frameworks.py streamlit
+
+# 测试 Gradio
+python test_frameworks.py gradio
+
+# 安装所有框架
+python test_frameworks.py --install-all
+```
+
+详细对比和迁移指南：[PYTHON_UI_FRAMEWORKS.md](PYTHON_UI_FRAMEWORKS.md)
+
+**对比总结：**
+
+| 方案 | 代码量 | 学习难度 | 数据可视化 | 推荐度 |
+|------|--------|---------|-----------|--------|
+| Flask + HTML/JS | 680+ 行 | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
+| Streamlit | ~130 行 | ⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| Gradio | ~200 行 | ⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| NiceGUI | ~250 行 | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
+
 ## 备注
 
 - 所有地址字段以 hex 字符串存储（`0x...`），不是整数类型。

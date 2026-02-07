@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instruction Database Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Instruction Database Viewer</h1>
+            <p class="subtitle">可视化分析指令执行轨迹和寄存器依赖关系</p>
+        </header>
+
+        <!-- Upload Section -->
+        <section id="upload-section" class="card">
+            <h2>📁 上传数据库文件</h2>
+            <div class="upload-area" id="upload-area">
+                <div class="upload-icon">📤</div>
+                <p>拖拽数据库文件到此处，或点击选择文件</p>
+                <p class="upload-hint">支持 .db, .sqlite, .sqlite3 格式</p>
+                <input type="file" id="file-input" accept=".db,.sqlite,.sqlite3" style="display: none;">
+                <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">
+                    选择文件
+                </button>
+            </div>
+            <div id="upload-status" class="upload-status"></div>
+        </section>
+
+        <!-- Statistics Section -->
+        <section id="stats-section" class="card" style="display: none;">
+            <h2>📈 数据库统计</h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">总指令数</div>
+                    <div class="stat-value" id="stat-instructions">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">寄存器依赖</div>
+                    <div class="stat-value" id="stat-registers">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">内存操作</div>
+                    <div class="stat-value" id="stat-memory">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">唯一寄存器</div>
+                    <div class="stat-value" id="stat-unique-regs">-</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Controls Section -->
+        <section id="controls-section" class="card" style="display: none;">
+            <h2>🔍 搜索与过滤</h2>
+            <div class="controls-grid">
+                <div class="control-group">
+                    <label for="search-input">搜索 (PC/反汇编)</label>
+                    <input type="text" id="search-input" placeholder="例如: 0x4000 或 mov">
+                </div>
+                <div class="control-group">
+                    <label for="register-filter">寄存器筛选</label>
+                    <select id="register-filter">
+                        <option value="">全部寄存器</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="page-size">每页显示</label>
+                    <select id="page-size">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <button class="btn btn-secondary" onclick="app.applyFilters()">应用过滤</button>
+                    <button class="btn btn-secondary" onclick="app.resetFilters()">重置</button>
+                </div>
+            </div>
+            <div class="export-buttons">
+                <button class="btn btn-export" onclick="app.exportData('json')">📥 导出 JSON</button>
+                <button class="btn btn-export" onclick="app.exportData('csv')">📥 导出 CSV</button>
+            </div>
+        </section>
+
+        <!-- Instructions Table Section -->
+        <section id="table-section" class="card" style="display: none;">
+            <h2>📋 指令列表</h2>
+            <div class="table-container">
+                <table id="instructions-table">
+                    <thead>
+                        <tr>
+                            <th onclick="app.sortBy('sequence_id')">Sequence ID <span class="sort-indicator"></span></th>
+                            <th onclick="app.sortBy('pc')">PC <span class="sort-indicator"></span></th>
+                            <th>反汇编</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                        <tr>
+                            <td colspan="4" class="loading">加载中...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination" id="pagination">
+                <button class="btn btn-small" onclick="app.goToPage(1)" id="btn-first">首页</button>
+                <button class="btn btn-small" onclick="app.previousPage()" id="btn-prev">上一页</button>
+                <span class="page-info" id="page-info">第 1 / 1 页</span>
+                <button class="btn btn-small" onclick="app.nextPage()" id="btn-next">下一页</button>
+                <button class="btn btn-small" onclick="app.goToPage(-1)" id="btn-last">末页</button>
+            </div>
+        </section>
+    </div>
+
+    <!-- Modal for Instruction Details -->
+    <div id="detail-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">指令详情</h2>
+                <span class="close" onclick="app.closeModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Dependency Tree -->
+    <div id="dependency-modal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 id="dependency-title">源寄存器依赖链</h2>
+                <span class="close" onclick="app.closeDependencyModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="dependency-controls">
+                    <label>最大深度:</label>
+                    <input type="number" id="max-depth" value="10" min="1" max="50">
+                    <button class="btn btn-small" onclick="app.reloadDependencies()">刷新</button>
+                    <label style="margin-left: 20px;">
+                        <input type="checkbox" id="text-format" onchange="app.toggleDependencyFormat()">
+                        文本格式
+                    </label>
+                </div>
+                <div id="dependency-body" class="dependency-container">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -12,6 +12,9 @@ dependencies = [
     "capstone>=5.0",
     "pydantic>=2.0",
     "anytree",
+    "flask>=3.0",
+    "streamlit>=1.54.0",
+    "nicegui>=3.7.1",
 ]
 
 [project.optional-dependencies]
