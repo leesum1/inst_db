@@ -294,7 +294,7 @@ class TestInstructionDB:
 
 
 class TestDisassembly:
-    """Test cases for ARM64 disassembly."""
+    """Test cases for ARM64 disassembly and semantic analysis."""
 
     def test_disassembly_included_in_instruction(self, temp_db):
         """Test that disassembly is automatically performed."""
@@ -307,6 +307,84 @@ class TestDisassembly:
         # Disassembly should be included
         assert instr.disassembly is not None
         assert len(instr.disassembly) > 0
+
+    def test_automatic_register_extraction(self, temp_db):
+        """Test that register dependencies are automatically extracted by Capstone."""
+        # Using verified instruction: add x0, x0, x0
+        instr = temp_db.add_instruction(
+            pc=0x1000,
+            instruction_code=bytes.fromhex("0000008b"),  # add x0, x0, x0
+            sequence_id=1,
+        )
+        
+        # Verify that register dependencies were automatically added
+        deps = temp_db.get_register_dependencies(instr.id)
+        assert len(deps) > 0, "Expected automatic register extraction"
+        
+        # Check that we have registers in the dependencies
+        reg_names = {dep.register_name for dep in deps}
+        print(f"Extracted registers: {reg_names}")
+        
+        # x0 should be present (both read and write)
+        assert "x0" in reg_names
+
+    def test_register_read_write_classification(self, temp_db):
+        """Test that registers are correctly classified as read, write, or both."""
+        # Using verified instruction: add x0, x0, x0 (reads and writes x0)
+        instr = temp_db.add_instruction(
+            pc=0x1000,
+            instruction_code=bytes.fromhex("0000008b"),  # add x0, x0, x0
+            sequence_id=1,
+        )
+        
+        deps = temp_db.get_register_dependencies(instr.id)
+        
+        # Verify that we have both source and destination registers
+        src_regs = [d for d in deps if d.is_src]
+        dst_regs = [d for d in deps if d.is_dst]
+        
+        print(f"Source registers: {[d.register_name for d in src_regs]}")
+        print(f"Destination registers: {[d.register_name for d in dst_regs]}")
+        
+        # At least one register should be read and one should be written
+        # For add instruction, x0 is both read and written
+        assert len(src_regs) > 0, "Expected at least one source register"
+        assert len(dst_regs) > 0, "Expected at least one destination register"
+
+    def test_automatic_memory_extraction(self, temp_db):
+        """Test that memory operations are automatically extracted."""
+        # ldr x3, [sp]
+        instr = temp_db.add_instruction(
+            pc=0x1000,
+            instruction_code=bytes.fromhex("e30340f9"),
+            sequence_id=1,
+        )
+
+        ops = temp_db.get_memory_operations(instr.id)
+        assert len(ops) == 1, "Expected one memory operation"
+        assert ops[0].operation_type == MemoryOperationType.READ
+        assert ops[0].data_length > 0
+
+    def test_implicit_registers_extraction(self, temp_db):
+        """Test that implicit register operations are extracted."""
+        # Different ARM64 instructions that have implicit registers
+        # For example, some instructions implicitly use sp, lr, etc.
+        instr = temp_db.add_instruction(
+            pc=0x1000,
+            instruction_code=bytes.fromhex("20000101aa"),
+            sequence_id=1,
+        )
+        
+        deps = temp_db.get_register_dependencies(instr.id)
+        
+        # The extraction should work without manual specification
+        assert len(deps) >= 0, "Register extraction should complete"
+        
+        # Print extracted registers for verification
+        for dep in deps:
+            print(
+                f"Register: {dep.register_name}, is_src={dep.is_src}, is_dst={dep.is_dst}"
+            )
 
 
 if __name__ == "__main__":

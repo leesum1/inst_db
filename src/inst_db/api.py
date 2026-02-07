@@ -31,9 +31,13 @@ class InstructionDB:
         pc: int,
         instruction_code: bytes,
         sequence_id: int,
+        register_state: Optional[dict] = None,
     ) -> Instruction:
         """
-        Add a new instruction to the database.
+        Add a new instruction to the database with automatic register dependency extraction.
+
+        Uses Capstone's semantic analysis to automatically extract all register reads
+        and writes (including implicit ones).
 
         Args:
             pc: Program counter address
@@ -41,11 +45,25 @@ class InstructionDB:
             sequence_id: Sequential order of execution
 
         Returns:
-            Created Instruction object
+            Created Instruction object with register dependencies
         """
-        # Disassemble the instruction
+        # Disassemble and extract register semantics
         disasm_result = self.disassembler.disassemble(instruction_code, pc)
         disassembly = disasm_result.full_text if disasm_result else "unknown"
+        regs_read = disasm_result.regs_read if disasm_result else set()
+        regs_write = disasm_result.regs_write if disasm_result else set()
+        mem_accesses = disasm_result.mem_accesses if disasm_result else []
+
+        def compute_effective_address(mem_access) -> int:
+            if not register_state or not mem_access.base_reg:
+                return 0
+            base_val = register_state.get(mem_access.base_reg)
+            if base_val is None:
+                return 0
+            index_val = 0
+            if mem_access.index_reg:
+                index_val = register_state.get(mem_access.index_reg, 0)
+            return base_val + (index_val * mem_access.index_scale) + mem_access.displacement
 
         with self.db_manager.get_session() as session:
             instruction = Instruction(
@@ -55,9 +73,61 @@ class InstructionDB:
                 sequence_id=sequence_id,
             )
             session.add(instruction)
+            session.flush()  # Get the instruction ID
+            instr_id = instruction.id
+
+            # 自动添加所有读取的寄存器依赖
+            for reg_name in regs_read:
+                reg_dep = RegisterDependency(
+                    instruction_id=instr_id,
+                    register_name=reg_name,
+                    is_src=True,
+                    is_dst=False,
+                )
+                session.add(reg_dep)
+
+            # 自动添加所有写入的寄存器依赖
+            for reg_name in regs_write:
+                # 检查是否已经添加为源寄存器（某些指令可能同时读写）
+                existing = session.query(RegisterDependency).filter_by(
+                    instruction_id=instr_id, register_name=reg_name
+                ).first()
+                
+                if existing:
+                    # 如果已存在，更新标志为读写
+                    existing.is_src = True
+                    existing.is_dst = True
+                else:
+                    # 创建新的依赖记录
+                    reg_dep = RegisterDependency(
+                        instruction_id=instr_id,
+                        register_name=reg_name,
+                        is_src=False,
+                        is_dst=True,
+                    )
+                    session.add(reg_dep)
+
+            # 自动添加内存操作（仅根据指令语义，地址未知）
+            for mem_access in mem_accesses:
+                effective_address = compute_effective_address(mem_access)
+                mem_op = MemoryOperation(
+                    instruction_id=instr_id,
+                    operation_type=MemoryOperationType[mem_access.operation],
+                    virtual_address=effective_address,
+                    physical_address=effective_address,
+                    base_reg=mem_access.base_reg,
+                    index_reg=mem_access.index_reg,
+                    displacement=mem_access.displacement,
+                    index_scale=mem_access.index_scale,
+                    data_content=None,
+                    data_length=mem_access.size or 0,
+                )
+                session.add(mem_op)
+
             session.commit()
-            # Object remains attached to session due to expire_on_commit=False
-            return instruction
+
+        # Query and return the created instruction
+        return self.get_instruction_by_id(instr_id)
 
     def add_register_dependency(
         self,
@@ -103,6 +173,10 @@ class InstructionDB:
         operation_type: str,
         virtual_address: int,
         physical_address: int,
+        base_reg: Optional[str] = None,
+        index_reg: Optional[str] = None,
+        displacement: int = 0,
+        index_scale: int = 1,
         data_content: Optional[bytes] = None,
         data_length: Optional[int] = None,
     ) -> MemoryOperation:
@@ -149,6 +223,10 @@ class InstructionDB:
                 operation_type=op_type_enum,
                 virtual_address=virtual_address,
                 physical_address=physical_address,
+                base_reg=base_reg,
+                index_reg=index_reg,
+                displacement=displacement,
+                index_scale=index_scale,
                 data_content=data_content,
                 data_length=data_length,
             )

@@ -101,6 +101,10 @@ class MemoryOperation(Base):
     )  # READ or WRITE
     virtual_address: Mapped[int] = mapped_column(Integer, nullable=False, index=True)  # VA
     physical_address: Mapped[int] = mapped_column(Integer, nullable=False, index=True)  # PA
+    base_reg: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # Base register
+    index_reg: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # Index register
+    displacement: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Disp
+    index_scale: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # Scale for index
     data_content: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)  # Actual data bytes
     data_length: Mapped[int] = mapped_column(Integer, nullable=False)  # Length in bytes
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -115,5 +119,7 @@ class MemoryOperation(Base):
         return (
             f"<MemoryOperation(id={self.id}, type={self.operation_type.value}, "
             f"va=0x{self.virtual_address:x}, pa=0x{self.physical_address:x}, "
+            f"base={self.base_reg}, index={self.index_reg}, "
+            f"scale={self.index_scale}, disp={self.displacement}, "
             f"len={self.data_length})>"
         )

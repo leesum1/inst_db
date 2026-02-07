@@ -1,9 +1,15 @@
-# Python
+# ============================================================================
+# Python & Virtual Environments
+# ============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+.venv/
+venv/
+env/
+ENV/
 build/
 develop-eggs/
 dist/
@@ -19,32 +25,49 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Virtual environments
-venv/
-env/
-ENV/
-
-# IDE
+# ============================================================================
+# IDE & Editor
+# ============================================================================
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
+*.sublime-*
 
-# Testing
+# ============================================================================
+# Testing & Coverage
+# ============================================================================
 .pytest_cache/
 .coverage
 htmlcov/
+.coveragerc
 .mypy_cache/
+.dmypy.json
+dmypy.json
 
+# ============================================================================
 # Database
+# ============================================================================
 *.db
 *.sqlite
 *.sqlite3
 instance/
 
+# ============================================================================
+# Temporary Artifacts
+# ============================================================================
+tmp/*.log
+tmp/*.out
+tmp/qsort_demo
+tmp/*.db
+
 # uv
 .venv/
 uv.lock
+.vscode-ctags
+trace_in_asm.log
