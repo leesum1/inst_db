@@ -146,7 +146,7 @@ OBJD-T: a00080d2410180d20200018b
             assert "x0" in instructions[0].disassembly
             
             # Check register dependencies
-            deps = db.get_register_dependencies(instructions[0].id)
+            deps = db.get_register_dependencies(instructions[0].sequence_id)
             writes = [d.register_name for d in deps if d.is_dst]
             assert "x0" in writes
         

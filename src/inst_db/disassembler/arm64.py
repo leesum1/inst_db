@@ -3,6 +3,8 @@
 from typing import Tuple, List, Optional, Set
 from dataclasses import dataclass
 
+from inst_db.utils import normalize_reg_name
+
 try:
     from capstone import (
         Cs,
@@ -90,7 +92,7 @@ class ARM64Disassembler:
             def infer_mem_size(access_type: str) -> int:
                 for op in instr.operands:
                     if op.type == CS_OP_REG or op.type == CS_OP_FP:
-                        reg_name = self.cs.reg_name(op.reg)
+                        reg_name = normalize_reg_name(self.cs.reg_name(op.reg))
                         if not reg_name:
                             continue
                         if access_type == "READ" and (op.access & CS_AC_WRITE):
@@ -102,7 +104,7 @@ class ARM64Disassembler:
             for operand in instr.operands:
                 # 处理寄存器操作数（整数寄存器和浮点寄存器）
                 if operand.type == CS_OP_REG or operand.type == CS_OP_FP:
-                    reg_name = self.cs.reg_name(operand.reg)
+                    reg_name = normalize_reg_name(self.cs.reg_name(operand.reg))
                     if not reg_name:
                         continue
 
@@ -117,12 +119,12 @@ class ARM64Disassembler:
                 if operand.type == CS_OP_MEM:
                     access = operand.access
                     base_reg = (
-                        self.cs.reg_name(operand.mem.base)
+                        normalize_reg_name(self.cs.reg_name(operand.mem.base))
                         if operand.mem.base
                         else None
                     )
                     index_reg = (
-                        self.cs.reg_name(operand.mem.index)
+                        normalize_reg_name(self.cs.reg_name(operand.mem.index))
                         if operand.mem.index
                         else None
                     )
@@ -194,7 +196,7 @@ class ARM64Disassembler:
                 def infer_mem_size(access_type: str) -> int:
                     for op in instr.operands:
                         if op.type == CS_OP_REG or op.type == CS_OP_FP:
-                            reg_name = self.cs.reg_name(op.reg)
+                            reg_name = normalize_reg_name(self.cs.reg_name(op.reg))
                             if not reg_name:
                                 continue
                             if access_type == "READ" and (op.access & CS_AC_WRITE):
@@ -206,7 +208,7 @@ class ARM64Disassembler:
                 for operand in instr.operands:
                     # 处理寄存器操作数（整数寄存器和浮点寄存器）
                     if operand.type == CS_OP_REG or operand.type == CS_OP_FP:
-                        reg_name = self.cs.reg_name(operand.reg)
+                        reg_name = normalize_reg_name(self.cs.reg_name(operand.reg))
                         if not reg_name:
                             continue
 
@@ -219,12 +221,12 @@ class ARM64Disassembler:
                     if operand.type == CS_OP_MEM:
                         access = operand.access
                         base_reg = (
-                            self.cs.reg_name(operand.mem.base)
+                            normalize_reg_name(self.cs.reg_name(operand.mem.base))
                             if operand.mem.base
                             else None
                         )
                         index_reg = (
-                            self.cs.reg_name(operand.mem.index)
+                            normalize_reg_name(self.cs.reg_name(operand.mem.index))
                             if operand.mem.index
                             else None
                         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build quicksort demo, run QEMU trace, and import into the database."""
+"""Build SVE demo, run QEMU trace, and import into the database."""
 
 import shutil
 import subprocess
@@ -8,15 +8,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TMP_DIR = ROOT / "tmp"
-SRC_FILE = TMP_DIR / "qsort_demo.c"
-BIN_FILE = TMP_DIR / "qsort_demo"
-TRACE_FILE = TMP_DIR / "qsort_trace.log"
-DB_FILE = TMP_DIR / "quicksort_trace.db"
+SRC_FILE = TMP_DIR / "sve_demo.c"
+BIN_FILE = TMP_DIR / "sve_demo"
+TRACE_FILE = TMP_DIR / "sve_trace.log"
+DB_FILE = TMP_DIR / "sve_trace.db"
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from inst_db.parsers import TraceImporter
 from inst_db.api import InstructionDB
+from inst_db.parsers import TraceImporter
+
+
+def pc_to_int(pc_value: str | int) -> int:
+    if isinstance(pc_value, int):
+        return pc_value
+    text = pc_value.strip().lower()
+    if text.startswith("0x"):
+        return int(text, 16)
+    return int(text, 16)
 
 
 def check_tool(name: str) -> None:
@@ -29,6 +38,7 @@ def build_binary() -> None:
         "aarch64-linux-gnu-gcc",
         "-static",
         "-O0",
+        "-march=armv8.2-a+sve",
         str(SRC_FILE),
         "-o",
         str(BIN_FILE),
@@ -39,6 +49,8 @@ def build_binary() -> None:
 def run_qemu_trace() -> None:
     cmd = [
         "qemu-aarch64-static",
+        "-cpu",
+        "max,sve=on",
         "-one-insn-per-tb",
         "-d",
         "in_asm,exec,cpu,nochain",
@@ -62,7 +74,7 @@ def print_stats() -> None:
     print(f"Total instructions: {len(instructions)}")
 
     if instructions:
-        pcs = [instr.pc for instr in instructions]
+        pcs = [pc_to_int(instr.pc) for instr in instructions]
         print(f"PC range: {min(pcs):#x} - {max(pcs):#x}")
         unique_pcs = len(set(pcs))
         print(f"Unique PCs: {unique_pcs}")
@@ -70,14 +82,15 @@ def print_stats() -> None:
 
         print("\nFirst 10 instructions:")
         for instr in instructions[:10]:
-            print(f"[{instr.sequence_id:4d}] {instr.pc:#018x}: {instr.disassembly}")
+            pc_int = pc_to_int(instr.pc)
+            print(f"[{instr.sequence_id:4d}] {pc_int:#018x}: {instr.disassembly}")
 
 
 def main() -> int:
     check_tool("aarch64-linux-gnu-gcc")
     check_tool("qemu-aarch64-static")
 
-    print("Building quicksort demo...")
+    print("Building SVE demo...")
     build_binary()
 
     print("Running QEMU trace...")

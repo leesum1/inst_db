@@ -58,21 +58,7 @@ def import_trace(self, max_instructions: Optional[int] = None) -> int:
 - ✅ 错误处理
 - ✅ 文件大小和行数统计
 
-#### 快速入门脚本
-**文件**: `examples/qemu_quickstart.py`
-- ✅ 自动创建测试程序
-- ✅ 编译 ARM64 代码
-- ✅ 生成 QEMU 跟踪
-- ✅ 导入数据库
-- ✅ 分析和统计
-- ✅ 完整的演示流程
-
-#### 导入示例
-**文件**: `examples/qemu_import_example.py`
-- ✅ 基本导入流程
-- ✅ 结果展示
-- ✅ 寄存器依赖显示
-- ✅ 统计信息
+（示例脚本已移除，保留核心导入与解析接口）
 
 ### 4. 测试套件
 **文件**: `tests/test_qemu_parser.py`
@@ -162,11 +148,7 @@ for i in db.get_instruction_trace(limit=10):
 ```
 
 ### 完整演示
-```bash
-cd examples
-chmod +x qemu_quickstart.py
-./qemu_quickstart.py
-```
+参考 [docs/QEMU_USAGE.md](docs/QEMU_USAGE.md) 中的最小流程示例。
 
 ## 📁 新增文件清单
 
@@ -177,21 +159,14 @@ src/inst_db/parsers/
 
 tests/
 └── test_qemu_parser.py   (7个测试用例, 197行)
-
-examples/
-├── qemu_import_example.py  (基本导入示例, 67行)
-└── qemu_quickstart.py      (完整演示, 252行)
-
 scripts/
 └── generate_qemu_trace.sh  (QEMU 封装脚本, 30行)
 
 docs/
 └── QEMU_USAGE.md          (使用文档, 230行)
-
-README_NEW.md              (更新的 README, 290行)
 ```
 
-**总计**: 8个新文件, ~1200 行代码+文档
+**总计**: 5 个新文件, ~1200 行代码+文档
 
 ## 🔄 修改的文件
 

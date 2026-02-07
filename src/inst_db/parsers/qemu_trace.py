@@ -221,27 +221,31 @@ class TraceImporter:
         
         count = 0
         sequence_id = 1
-        
-        for pc, instruction_bytes, register_state in self.parser.parse_with_registers():
-            if max_instructions and count >= max_instructions:
-                break
-            
-            try:
-                db.add_instruction(
-                    pc=pc,
-                    instruction_code=instruction_bytes,
-                    sequence_id=sequence_id,
-                    register_state=register_state,
-                )
-                count += 1
-                sequence_id += 1
-                
-                if count % 1000 == 0:
-                    print(f"Imported {count} instructions...")
-            
-            except Exception as e:
-                print(f"Warning: Failed to import instruction at PC={pc:#x}: {e}")
-                continue
+
+        with db.db_manager.get_session() as session:
+            for pc, instruction_bytes, register_state in self.parser.parse_with_registers():
+                if max_instructions and count >= max_instructions:
+                    break
+
+                try:
+                    db.add_instruction(
+                        pc=pc,
+                        instruction_code=instruction_bytes,
+                        sequence_id=sequence_id,
+                        register_state=register_state,
+                        session=session,
+                        flush=False,
+                    )
+                    count += 1
+                    sequence_id += 1
+
+                    if count % 1000 == 0:
+                        session.flush()
+                        print(f"Imported {count} instructions...")
+
+                except Exception as e:
+                    print(f"Warning: Failed to import instruction at PC={pc:#x}: {e}")
+                    continue
         
         print(f"Successfully imported {count} instructions")
         return count

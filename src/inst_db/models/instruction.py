@@ -1,14 +1,13 @@
 """Data models for instruction tracing."""
 
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import (
     String,
     Integer,
+    BigInteger,
     Boolean,
     LargeBinary,
-    DateTime,
     ForeignKey,
     Enum,
 )
@@ -24,12 +23,10 @@ class Instruction(Base):
 
     __tablename__ = "instructions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    sequence_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
-    pc: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    sequence_id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    pc: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     instruction_code: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)  # Raw bytes
     disassembly: Mapped[str] = mapped_column(String, nullable=False)  # Disassembled text (e.g., "mov x0, x1")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     register_dependencies: Mapped[List["RegisterDependency"]] = relationship(
@@ -45,7 +42,7 @@ class Instruction(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<Instruction(id={self.id}, sequence_id={self.sequence_id}, "
+            f"<Instruction(sequence_id={self.sequence_id}, "
             f"pc=0x{self.pc:x}, disassembly='{self.disassembly}')>"
         )
 
@@ -56,7 +53,8 @@ class RegisterDependency(Base):
     __tablename__ = "register_dependencies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    instruction_id: Mapped[int] = mapped_column(Integer, ForeignKey("instructions.id"), nullable=False, index=True)
+    instruction_id: Mapped[int] = mapped_column(Integer, ForeignKey("instructions.sequence_id"), nullable=False, index=True)
+    register_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Capstone register ID
     register_name: Mapped[str] = mapped_column(String(16), nullable=False)  # e.g., "x0", "sp", "pc"
     is_src: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # Is source register
     is_dst: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # Is destination register
@@ -77,7 +75,7 @@ class RegisterDependency(Base):
             else:
                 flags = "DST"
         return (
-            f"<RegisterDependency(id={self.id}, register='{self.register_name}', "
+            f"<RegisterDependency(id={self.id}, instruction_id={self.instruction_id}, register='{self.register_name}', "
             f"flags={flags})>"
         )
 
@@ -95,19 +93,18 @@ class MemoryOperation(Base):
     __tablename__ = "memory_operations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    instruction_id: Mapped[int] = mapped_column(Integer, ForeignKey("instructions.id"), nullable=False, index=True)
+    instruction_id: Mapped[int] = mapped_column(Integer, ForeignKey("instructions.sequence_id"), nullable=False, index=True)
     operation_type: Mapped[MemoryOperationType] = mapped_column(
         Enum(MemoryOperationType), nullable=False
     )  # READ or WRITE
-    virtual_address: Mapped[int] = mapped_column(Integer, nullable=False, index=True)  # VA
-    physical_address: Mapped[int] = mapped_column(Integer, nullable=False, index=True)  # PA
+    virtual_address: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # VA
+    physical_address: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # PA
     base_reg: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # Base register
     index_reg: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # Index register
     displacement: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Disp
     index_scale: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # Scale for index
     data_content: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)  # Actual data bytes
     data_length: Mapped[int] = mapped_column(Integer, nullable=False)  # Length in bytes
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # Relationship
     instruction: Mapped["Instruction"] = relationship(
@@ -117,7 +114,7 @@ class MemoryOperation(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<MemoryOperation(id={self.id}, type={self.operation_type.value}, "
+            f"<MemoryOperation(id={self.id}, instruction_id={self.instruction_id}, type={self.operation_type.value}, "
             f"va=0x{self.virtual_address:x}, pa=0x{self.physical_address:x}, "
             f"base={self.base_reg}, index={self.index_reg}, "
             f"scale={self.index_scale}, disp={self.displacement}, "

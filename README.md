@@ -1,128 +1,122 @@
-# ARM64 指令跟踪数据库系统
+# Instruction DB
 
-一个基于 Python、SQLAlchemy 和 Capstone 的 ARM64 指令执行跟踪和分析系统。
+该项目提供一套 ARM64 指令数据库结构，并提供统一的插入接口用于构建指令跟踪库。
 
-## 功能特性
-
-- 📊 **完整的指令记录**：存储 PC、指令码、反汇编结果和执行顺序
-- 📝 **寄存器依赖追踪**：记录每条指令的源/目的寄存器
-- 🔍 **内存操作追踪**：记录虚拟地址、物理地址、读写数据和长度
-- 🗄️ **轻量级数据库**：基于 SQLite，易于部署和分享
-- 🔧 **易用的 Python API**：简洁的高级接口用于数据录入和查询
-
-## 项目结构
+## 目录结构
 
 ```
 inst_db/
-├── src/inst_db/
-│   ├── models/          # 数据模型定义
-│   ├── database/        # 数据库连接和管理
-│   ├── disassembler/    # ARM64 反汇编模块
-│   ├── utils/           # 工具函数
-│   └── api.py           # 高级 API 接口
-├── tests/               # 测试用例
-├── examples/            # 使用示例
-├── scripts/             # 初始化脚本
-└── pyproject.toml       # 项目配置
+├── src/inst_db/         # 核心库
+│   ├── api.py           # 统一插入接口
+│   ├── models/          # 数据模型
+│   ├── database/        # 数据库连接
+│   ├── disassembler/    # 反汇编与语义提取
+│   └── parsers/         # QEMU 跟踪解析
+├── scripts/             # 工具脚本
+│   └── runners/         # 跟踪生成/导入脚本
+├── tests/               # 测试
+└── pyproject.toml
 ```
 
-## 安装
+## 数据库结构
 
-使用 uv 管理项目依赖：
+### instructions
+- `sequence_id` (INTEGER, PK) - 指令执行序列号
+- `pc` (TEXT, hex string, 例如 "0x0000000000400580")
+- `instruction_code` (BLOB)
+- `disassembly` (TEXT)
 
-```bash
-# 安装项目
-uv sync
+### register_dependencies
+- `id` (INTEGER, PK, AUTOINCREMENT)
+- `instruction_id` (INTEGER, FK -> instructions.sequence_id, INDEX)
+- `register_id` (INTEGER, nullable) - Capstone register ID
+- `register_name` (TEXT)
+- `is_src` (BOOLEAN)
+- `is_dst` (BOOLEAN)
 
-# 开发模式安装（带开发依赖）
-uv sync --with dev
-```
+### memory_operations
+- `id` (INTEGER, PK, AUTOINCREMENT)
+- `instruction_id` (INTEGER, FK -> instructions.sequence_id, INDEX)
+- `operation_type` (ENUM: READ/WRITE)
+- `virtual_address` (TEXT, hex string, INDEX)
+- `physical_address` (TEXT, hex string)
+- `base_reg` (TEXT, nullable)
+- `index_reg` (TEXT, nullable)
+- `displacement` (INTEGER)
+- `index_scale` (INTEGER)
+- `data_content` (BLOB, nullable)
+- `data_length` (INTEGER)
 
-## 快速开始
+关系说明：
+- `instructions` 1:N `register_dependencies`
+- `instructions` 1:N `memory_operations`
 
-### 初始化数据库
-
-```bash
-python scripts/init_db.py
-```
-
-### 使用 API 录入数据
+## 统一插入接口
 
 ```python
 from inst_db.api import InstructionDB
 
-# 初始化数据库
-db = InstructionDB("trace.db")
+db = InstructionDB("sqlite:///trace.db")
 
-# 添加指令
 instr = db.add_instruction(
-    pc=0x1000,
-    instruction_code=b'\x11\x00\x00\x94',  # 原始指令字节
-    sequence_id=1
+  pc=0x400580,
+  instruction_code=bytes.fromhex("a00080d2"),
+  sequence_id=1,
 )
 
-# 添加寄存器依赖
 db.add_register_dependency(
-    instruction_id=instr.id,
-    register_name="x0",
-    is_src=True,
-    is_dst=False
+  sequence_id=instr.sequence_id,
+  register_name="x0",
+  is_src=True,
+  is_dst=False,
 )
 
-# 添加内存操作
 db.add_memory_operation(
-    instruction_id=instr.id,
-    operation_type="READ",
-    virtual_address=0x7fff0000,
-    physical_address=0x3fff0000,
-    data_content=b'\x01\x02\x03\x04',
-    data_length=4
+  sequence_id=instr.sequence_id,
+  operation_type="READ",
+  virtual_address=0x7fff0000,
+  physical_address=0x3fff0000,
+  data_length=4,
 )
 ```
 
-## 数据模型
+## QEMU 跟踪导入
 
-### Instruction（指令表）
-- `id`: 主键
-- `sequence_id`: 指令执行顺序
-- `pc`: 程序计数器
-- `instruction_code`: 指令的原始字节（HEX）
-- `disassembly`: 反汇编结果
-- `created_at`: 创建时间
+```python
+from inst_db.parsers import TraceImporter
 
-### RegisterDependency（寄存器依赖表）
-- `id`: 主键
-- `instruction_id`: 关联指令（外键）
-- `register_name`: 寄存器名称 (如 "x0", "sp"等)
-- `is_src`: 是否为源寄存器
-- `is_dst`: 是否为目的寄存器
+TraceImporter("trace.log", "trace.db").import_trace()
+```
 
-### MemoryOperation（内存操作表）
-- `id`: 主键
-- `instruction_id`: 关联指令（外键）
-- `operation_type`: 操作类型 ("READ" 或 "WRITE")
-- `virtual_address`: 虚拟地址
-- `physical_address`: 物理地址
-- `data_content`: 操作数据（二进制）
-- `data_length`: 数据长度
-- `created_at`: 创建时间
+### 使用跟踪脚本
 
-## 依赖库
-
-- **SQLAlchemy 2.0+**: ORM 框架
-- **Capstone 5.0+**: 多架构反汇编引擎
-- **Pydantic 2.0+**: 数据验证
-
-## 测试
+统一的跟踪脚本支持多个演示程序：
 
 ```bash
-# 运行所有测试
-pytest
+# 运行 quicksort 演示的跟踪
+python scripts/runners/run_qemu_trace.py qsort
 
-# 运行带覆盖率的测试
-pytest --cov=src/inst_db
+# 运行 SVE 演示的跟踪
+python scripts/runners/run_qemu_trace.py sve
+
+# 跳过构建，只运行跟踪和导入
+python scripts/runners/run_qemu_trace.py qsort --no-build
+
+# 跳过导入数据库
+python scripts/runners/run_qemu_trace.py qsort --no-import
+
+# 跳过统计信息输出
+python scripts/runners/run_qemu_trace.py qsort --no-stats
 ```
 
-## 许可证
+参数说明：
+- `qsort|sve` - 选择要运行的演示程序
+- `--no-build` - 跳过二进制文件构建
+- `--no-trace` - 跳过 QEMU 跟踪执行
+- `--no-import` - 跳过导入到数据库
+- `--no-stats` - 跳过打印统计信息
 
-MIT
+## 备注
+
+- 所有地址字段以 hex 字符串存储（`0x...`），不是整数类型。
+- 如果需要导出文本分析，使用 [docs/EXPORT_TOOL.md](docs/EXPORT_TOOL.md) 中的工具脚本。

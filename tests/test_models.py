@@ -39,7 +39,7 @@ class TestInstructionDB:
             instruction_code=bytes.fromhex("20000101aa"),
             sequence_id=1,
         )
-        assert instr.id is not None
+        assert instr.sequence_id is not None
         assert instr.pc == 0x1000
         assert instr.sequence_id == 1
         assert instr.instruction_code == bytes.fromhex("20000101aa")
@@ -57,18 +57,18 @@ class TestInstructionDB:
             sequence_id=2,
         )
         
-        assert instr1.id != instr2.id
+        assert instr1.sequence_id != instr2.sequence_id
         assert instr1.sequence_id == 1
         assert instr2.sequence_id == 2
 
     def test_get_instruction_by_id(self, temp_db):
-        """Test retrieving instruction by ID."""
+        """Test retrieving instruction by sequence ID."""
         instr = temp_db.add_instruction(
             pc=0x1000,
             instruction_code=bytes.fromhex("20000101aa"),
             sequence_id=1,
         )
-        retrieved = temp_db.get_instruction_by_id(instr.id)
+        retrieved = temp_db.get_instruction_by_sequence_id(instr.sequence_id)
         assert retrieved is not None
         assert retrieved.pc == instr.pc
 
@@ -81,7 +81,7 @@ class TestInstructionDB:
         )
         retrieved = temp_db.get_instruction_by_pc(0x1000)
         assert retrieved is not None
-        assert retrieved.id == instr.id
+        assert retrieved.sequence_id == instr.sequence_id
 
     def test_add_register_dependency(self, temp_db):
         """Test adding register dependencies."""
@@ -92,14 +92,13 @@ class TestInstructionDB:
         )
         
         reg_dep = temp_db.add_register_dependency(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             register_name="x0",
             is_src=False,
             is_dst=True,
         )
         
-        assert reg_dep.id is not None
-        assert reg_dep.instruction_id == instr.id
+        assert reg_dep.instruction_id == instr.sequence_id
         assert reg_dep.register_name == "x0"
         assert reg_dep.is_src is False
         assert reg_dep.is_dst is True
@@ -108,7 +107,7 @@ class TestInstructionDB:
         """Test adding register dependency to non-existent instruction."""
         with pytest.raises(ValueError):
             temp_db.add_register_dependency(
-                instruction_id=9999,
+                sequence_id=9999,
                 register_name="x0",
                 is_src=True,
                 is_dst=False,
@@ -123,7 +122,7 @@ class TestInstructionDB:
         )
         
         mem_op = temp_db.add_memory_operation(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             operation_type="READ",
             virtual_address=0x7fff0000,
             physical_address=0x3fff0000,
@@ -131,8 +130,7 @@ class TestInstructionDB:
             data_length=4,
         )
         
-        assert mem_op.id is not None
-        assert mem_op.instruction_id == instr.id
+        assert mem_op.instruction_id == instr.sequence_id
         assert mem_op.operation_type == MemoryOperationType.READ
         assert mem_op.virtual_address == 0x7fff0000
         assert mem_op.physical_address == 0x3fff0000
@@ -148,7 +146,7 @@ class TestInstructionDB:
         
         data = b'\x01\x02\x03\x04'
         mem_op = temp_db.add_memory_operation(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             operation_type="WRITE",
             virtual_address=0x7fff0000,
             physical_address=0x3fff0000,
@@ -167,7 +165,7 @@ class TestInstructionDB:
         
         with pytest.raises(ValueError):
             temp_db.add_memory_operation(
-                instruction_id=instr.id,
+                sequence_id=instr.sequence_id,
                 operation_type="INVALID",
                 virtual_address=0x7fff0000,
                 physical_address=0x3fff0000,
@@ -183,19 +181,19 @@ class TestInstructionDB:
         )
         
         temp_db.add_register_dependency(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             register_name="x0",
             is_src=False,
             is_dst=True,
         )
         temp_db.add_register_dependency(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             register_name="x1",
             is_src=True,
             is_dst=False,
         )
         
-        deps = temp_db.get_register_dependencies(instr.id)
+        deps = temp_db.get_register_dependencies(instr.sequence_id)
         assert len(deps) == 2
 
     def test_get_memory_operations(self, temp_db):
@@ -207,21 +205,21 @@ class TestInstructionDB:
         )
         
         temp_db.add_memory_operation(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             operation_type="READ",
             virtual_address=0x7fff0000,
             physical_address=0x3fff0000,
             data_length=4,
         )
         temp_db.add_memory_operation(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             operation_type="WRITE",
             virtual_address=0x7fff0004,
             physical_address=0x3fff0004,
             data_length=8,
         )
         
-        ops = temp_db.get_memory_operations(instr.id)
+        ops = temp_db.get_memory_operations(instr.sequence_id)
         assert len(ops) == 2
 
     def test_get_instruction_trace(self, temp_db):
@@ -246,16 +244,16 @@ class TestInstructionDB:
             instruction_code=bytes.fromhex("20000101aa"),
             sequence_id=1,
         )
-        instr_id = instr.id
+        seq_id = instr.sequence_id
         
         # Verify it exists
-        assert temp_db.get_instruction_by_id(instr_id) is not None
+        assert temp_db.get_instruction_by_sequence_id(seq_id) is not None
         
         # Delete it
-        assert temp_db.delete_instruction(instr_id) is True
+        assert temp_db.delete_instruction(seq_id) is True
         
         # Verify it's gone
-        assert temp_db.get_instruction_by_id(instr_id) is None
+        assert temp_db.get_instruction_by_sequence_id(seq_id) is None
 
     def test_delete_nonexistent_instruction(self, temp_db):
         """Test deleting non-existent instruction."""
@@ -271,14 +269,14 @@ class TestInstructionDB:
         )
         
         reg_dep = temp_db.add_register_dependency(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             register_name="x0",
             is_src=False,
             is_dst=True,
         )
         
         mem_op = temp_db.add_memory_operation(
-            instruction_id=instr.id,
+            sequence_id=instr.sequence_id,
             operation_type="READ",
             virtual_address=0x7fff0000,
             physical_address=0x3fff0000,
@@ -286,11 +284,13 @@ class TestInstructionDB:
         )
         
         # Delete instruction
-        temp_db.delete_instruction(instr.id)
+        temp_db.delete_instruction(instr.sequence_id)
         
         # Verify dependencies are also deleted
-        assert temp_db.get_register_dependency_by_id(reg_dep.id) is None
-        assert temp_db.get_memory_operation_by_id(mem_op.id) is None
+        deps = temp_db.get_register_dependencies(instr.sequence_id)
+        ops = temp_db.get_memory_operations(instr.sequence_id)
+        assert len(deps) == 0
+        assert len(ops) == 0
 
 
 class TestDisassembly:
@@ -318,7 +318,7 @@ class TestDisassembly:
         )
         
         # Verify that register dependencies were automatically added
-        deps = temp_db.get_register_dependencies(instr.id)
+        deps = temp_db.get_register_dependencies(instr.sequence_id)
         assert len(deps) > 0, "Expected automatic register extraction"
         
         # Check that we have registers in the dependencies
@@ -337,7 +337,7 @@ class TestDisassembly:
             sequence_id=1,
         )
         
-        deps = temp_db.get_register_dependencies(instr.id)
+        deps = temp_db.get_register_dependencies(instr.sequence_id)
         
         # Verify that we have both source and destination registers
         src_regs = [d for d in deps if d.is_src]
@@ -360,7 +360,7 @@ class TestDisassembly:
             sequence_id=1,
         )
 
-        ops = temp_db.get_memory_operations(instr.id)
+        ops = temp_db.get_memory_operations(instr.sequence_id)
         assert len(ops) == 1, "Expected one memory operation"
         assert ops[0].operation_type == MemoryOperationType.READ
         assert ops[0].data_length > 0
@@ -375,7 +375,7 @@ class TestDisassembly:
             sequence_id=1,
         )
         
-        deps = temp_db.get_register_dependencies(instr.id)
+        deps = temp_db.get_register_dependencies(instr.sequence_id)
         
         # The extraction should work without manual specification
         assert len(deps) >= 0, "Register extraction should complete"

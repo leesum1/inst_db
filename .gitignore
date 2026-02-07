@@ -71,3 +71,7 @@ tmp/*.db
 uv.lock
 .vscode-ctags
 trace_in_asm.log
+
+
+tmp/
+docs/

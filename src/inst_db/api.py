@@ -26,12 +26,23 @@ class InstructionDB:
         self.db_manager = init_database(database_url)
         self.disassembler = ARM64Disassembler()
 
+    @staticmethod
+    def _to_hex_text(value: int | str) -> str:
+        if isinstance(value, str):
+            value = value.strip().lower()
+            if value.startswith("0x"):
+                return value
+            return f"0x{int(value, 16):016x}"
+        return f"0x{value:016x}"
+
     def add_instruction(
         self,
         pc: int,
         instruction_code: bytes,
         sequence_id: int,
         register_state: Optional[dict] = None,
+        session: Optional[Session] = None,
+        flush: bool = True,
     ) -> Instruction:
         """
         Add a new instruction to the database with automatic register dependency extraction.
@@ -65,56 +76,55 @@ class InstructionDB:
                 index_val = register_state.get(mem_access.index_reg, 0)
             return base_val + (index_val * mem_access.index_scale) + mem_access.displacement
 
-        with self.db_manager.get_session() as session:
+        def add_with_session(active_session: Session) -> Instruction:
             instruction = Instruction(
-                pc=pc,
+                pc=self._to_hex_text(pc),
                 instruction_code=instruction_code,
                 disassembly=disassembly,
                 sequence_id=sequence_id,
             )
-            session.add(instruction)
-            session.flush()  # Get the instruction ID
-            instr_id = instruction.id
+            active_session.add(instruction)
 
-            # 自动添加所有读取的寄存器依赖
-            for reg_name in regs_read:
+            # 自动添加所有寄存器依赖（避免额外查询）
+            read_only = regs_read - regs_write
+            write_only = regs_write - regs_read
+            read_write = regs_read & regs_write
+
+            for reg_name in sorted(read_only):
                 reg_dep = RegisterDependency(
-                    instruction_id=instr_id,
+                    instruction=instruction,
                     register_name=reg_name,
                     is_src=True,
                     is_dst=False,
                 )
-                session.add(reg_dep)
+                active_session.add(reg_dep)
 
-            # 自动添加所有写入的寄存器依赖
-            for reg_name in regs_write:
-                # 检查是否已经添加为源寄存器（某些指令可能同时读写）
-                existing = session.query(RegisterDependency).filter_by(
-                    instruction_id=instr_id, register_name=reg_name
-                ).first()
-                
-                if existing:
-                    # 如果已存在，更新标志为读写
-                    existing.is_src = True
-                    existing.is_dst = True
-                else:
-                    # 创建新的依赖记录
-                    reg_dep = RegisterDependency(
-                        instruction_id=instr_id,
-                        register_name=reg_name,
-                        is_src=False,
-                        is_dst=True,
-                    )
-                    session.add(reg_dep)
+            for reg_name in sorted(write_only):
+                reg_dep = RegisterDependency(
+                    instruction=instruction,
+                    register_name=reg_name,
+                    is_src=False,
+                    is_dst=True,
+                )
+                active_session.add(reg_dep)
+
+            for reg_name in sorted(read_write):
+                reg_dep = RegisterDependency(
+                    instruction=instruction,
+                    register_name=reg_name,
+                    is_src=True,
+                    is_dst=True,
+                )
+                active_session.add(reg_dep)
 
             # 自动添加内存操作（仅根据指令语义，地址未知）
             for mem_access in mem_accesses:
                 effective_address = compute_effective_address(mem_access)
                 mem_op = MemoryOperation(
-                    instruction_id=instr_id,
+                    instruction=instruction,
                     operation_type=MemoryOperationType[mem_access.operation],
-                    virtual_address=effective_address,
-                    physical_address=effective_address,
+                    virtual_address=self._to_hex_text(effective_address),
+                    physical_address=self._to_hex_text(effective_address),
                     base_reg=mem_access.base_reg,
                     index_reg=mem_access.index_reg,
                     displacement=mem_access.displacement,
@@ -122,25 +132,33 @@ class InstructionDB:
                     data_content=None,
                     data_length=mem_access.size or 0,
                 )
-                session.add(mem_op)
+                active_session.add(mem_op)
 
-            session.commit()
+            if flush:
+                active_session.flush()
 
-        # Query and return the created instruction
-        return self.get_instruction_by_id(instr_id)
+            return instruction
+
+        if session is not None:
+            return add_with_session(session)
+
+        with self.db_manager.get_session() as scoped_session:
+            return add_with_session(scoped_session)
 
     def add_register_dependency(
         self,
-        instruction_id: int,
+        sequence_id: int,
         register_name: str,
+        register_id: Optional[int] = None,
         is_src: bool = False,
         is_dst: bool = False,
+        session: Optional[Session] = None,
     ) -> RegisterDependency:
         """
         Add a register dependency for an instruction.
 
         Args:
-            instruction_id: ID of the instruction
+            sequence_id: Sequence ID of the instruction
             register_name: Name of the register (e.g., "x0", "sp")
             is_src: Whether this is a source register
             is_dst: Whether this is a destination register
@@ -149,42 +167,48 @@ class InstructionDB:
             Created RegisterDependency object
 
         Raises:
-            ValueError: If register_id does not exist
+            ValueError: If sequence_id does not exist
         """
-        with self.db_manager.get_session() as session:
-            # Verify instruction exists
-            instruction = session.query(Instruction).filter_by(id=instruction_id).first()
+        def add_with_session(active_session: Session) -> RegisterDependency:
+            instruction = active_session.query(Instruction).filter_by(sequence_id=sequence_id).first()
             if not instruction:
-                raise ValueError(f"Instruction with ID {instruction_id} not found")
+                raise ValueError(f"Instruction with sequence_id {sequence_id} not found")
 
             reg_dep = RegisterDependency(
-                instruction_id=instruction_id,
+                instruction_id=sequence_id,
+                register_id=register_id,
                 register_name=register_name,
                 is_src=is_src,
                 is_dst=is_dst,
             )
-            session.add(reg_dep)
-            session.commit()
+            active_session.add(reg_dep)
             return reg_dep
+
+        if session is not None:
+            return add_with_session(session)
+
+        with self.db_manager.get_session() as scoped_session:
+            return add_with_session(scoped_session)
 
     def add_memory_operation(
         self,
-        instruction_id: int,
+        sequence_id: int,
         operation_type: str,
-        virtual_address: int,
-        physical_address: int,
+        virtual_address: int | str,
+        physical_address: int | str,
         base_reg: Optional[str] = None,
         index_reg: Optional[str] = None,
         displacement: int = 0,
         index_scale: int = 1,
         data_content: Optional[bytes] = None,
         data_length: Optional[int] = None,
+        session: Optional[Session] = None,
     ) -> MemoryOperation:
         """
         Add a memory operation for an instruction.
 
         Args:
-            instruction_id: ID of the instruction
+            sequence_id: Sequence ID of the instruction
             operation_type: "READ" or "WRITE"
             virtual_address: Virtual address accessed
             physical_address: Physical address accessed
@@ -195,7 +219,7 @@ class InstructionDB:
             Created MemoryOperation object
 
         Raises:
-            ValueError: If instruction_id does not exist or operation_type is invalid
+            ValueError: If sequence_id does not exist or operation_type is invalid
         """
         # Validate operation type
         try:
@@ -212,17 +236,16 @@ class InstructionDB:
             else:
                 data_length = 0
 
-        with self.db_manager.get_session() as session:
-            # Verify instruction exists
-            instruction = session.query(Instruction).filter_by(id=instruction_id).first()
+        def add_with_session(active_session: Session) -> MemoryOperation:
+            instruction = active_session.query(Instruction).filter_by(sequence_id=sequence_id).first()
             if not instruction:
-                raise ValueError(f"Instruction with ID {instruction_id} not found")
+                raise ValueError(f"Instruction with sequence_id {sequence_id} not found")
 
             mem_op = MemoryOperation(
-                instruction_id=instruction_id,
+                instruction_id=sequence_id,
                 operation_type=op_type_enum,
-                virtual_address=virtual_address,
-                physical_address=physical_address,
+                virtual_address=self._to_hex_text(virtual_address),
+                physical_address=self._to_hex_text(physical_address),
                 base_reg=base_reg,
                 index_reg=index_reg,
                 displacement=displacement,
@@ -230,33 +253,47 @@ class InstructionDB:
                 data_content=data_content,
                 data_length=data_length,
             )
-            session.add(mem_op)
-            session.commit()
+            active_session.add(mem_op)
             return mem_op
 
-    def get_instruction_by_id(self, instruction_id: int) -> Optional[Instruction]:
-        """Get instruction by ID."""
+        if session is not None:
+            return add_with_session(session)
+
+        with self.db_manager.get_session() as scoped_session:
+            return add_with_session(scoped_session)
+
+    def get_instruction_by_sequence_id(self, sequence_id: int) -> Optional[Instruction]:
+        """Get instruction by sequence ID."""
         with self.db_manager.get_session() as session:
-            instruction = session.query(Instruction).filter_by(id=instruction_id).first()
+            instruction = session.query(Instruction).filter_by(sequence_id=sequence_id).first()
             return instruction
 
-    def get_instruction_by_pc(self, pc: int) -> Optional[Instruction]:
+    def get_instruction_by_pc(self, pc: int | str) -> Optional[Instruction]:
         """Get instruction by program counter."""
+        pc_text = self._to_hex_text(pc)
         with self.db_manager.get_session() as session:
-            instruction = session.query(Instruction).filter_by(pc=pc).first()
+            instruction = session.query(Instruction).filter_by(pc=pc_text).first()
             return instruction
 
-    def get_register_dependency_by_id(self, reg_dep_id: int) -> Optional[RegisterDependency]:
-        """Get register dependency by ID."""
+    def get_register_dependency_by_instruction(self, sequence_id: int) -> List[RegisterDependency]:
+        """Get all register dependencies for an instruction by sequence_id."""
         with self.db_manager.get_session() as session:
-            reg_dep = session.query(RegisterDependency).filter_by(id=reg_dep_id).first()
-            return reg_dep
+            deps = (
+                session.query(RegisterDependency)
+                .filter_by(instruction_id=sequence_id)
+                .all()
+            )
+            return deps
 
-    def get_memory_operation_by_id(self, mem_op_id: int) -> Optional[MemoryOperation]:
-        """Get memory operation by ID."""
+    def get_memory_operation_by_instruction(self, sequence_id: int) -> List[MemoryOperation]:
+        """Get all memory operations for an instruction by sequence_id."""
         with self.db_manager.get_session() as session:
-            mem_op = session.query(MemoryOperation).filter_by(id=mem_op_id).first()
-            return mem_op
+            ops = (
+                session.query(MemoryOperation)
+                .filter_by(instruction_id=sequence_id)
+                .all()
+            )
+            return ops
 
     def get_all_instructions(self, order_by_sequence: bool = True) -> List[Instruction]:
         """
@@ -268,13 +305,19 @@ class InstructionDB:
         Returns:
             List of all Instruction objects
         """
+        from sqlalchemy.orm import joinedload
+        
         with self.db_manager.get_session() as session:
-            query = session.query(Instruction)
+            query = session.query(Instruction).options(
+                joinedload(Instruction.memory_operations),
+                joinedload(Instruction.register_dependencies)
+            )
             if order_by_sequence:
                 query = query.order_by(Instruction.sequence_id)
             else:
                 query = query.order_by(Instruction.pc)
             instructions = query.all()
+            # Detach from session by converting to dict
             return instructions
 
     def get_instruction_trace(self) -> List[Instruction]:
@@ -287,39 +330,39 @@ class InstructionDB:
         return self.get_all_instructions(order_by_sequence=True)
 
     def get_register_dependencies(
-        self, instruction_id: int
+        self, sequence_id: int
     ) -> List[RegisterDependency]:
         """Get all register dependencies for an instruction."""
         with self.db_manager.get_session() as session:
             deps = (
                 session.query(RegisterDependency)
-                .filter_by(instruction_id=instruction_id)
+                .filter_by(instruction_id=sequence_id)
                 .all()
             )
             return deps
 
-    def get_memory_operations(self, instruction_id: int) -> List[MemoryOperation]:
+    def get_memory_operations(self, sequence_id: int) -> List[MemoryOperation]:
         """Get all memory operations for an instruction."""
         with self.db_manager.get_session() as session:
             ops = (
                 session.query(MemoryOperation)
-                .filter_by(instruction_id=instruction_id)
+                .filter_by(instruction_id=sequence_id)
                 .all()
             )
             return ops
 
-    def delete_instruction(self, instruction_id: int) -> bool:
+    def delete_instruction(self, sequence_id: int) -> bool:
         """
         Delete an instruction and all its associated data.
 
         Args:
-            instruction_id: ID of the instruction to delete
+            sequence_id: Sequence ID of the instruction to delete
 
         Returns:
             True if deletion was successful, False if instruction not found
         """
         with self.db_manager.get_session() as session:
-            instruction = session.query(Instruction).filter_by(id=instruction_id).first()
+            instruction = session.query(Instruction).filter_by(sequence_id=sequence_id).first()
             if not instruction:
                 return False
             session.delete(instruction)

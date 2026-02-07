@@ -54,14 +54,11 @@ for instr in db.get_instruction_trace(limit=20):
         print(f"  Writes: {', '.join(writes)}")
 ```
 
-## 完整示例
-
-运行提供的示例脚本：
+## 完整流程示例
 
 ```bash
-# 生成测试程序的跟踪
-cd /tmp
-cat > test.s << 'EOF'
+# 1. 生成测试程序
+cat > /tmp/test.s << 'EOF'
 .global _start
 .text
 _start:
@@ -73,13 +70,13 @@ _start:
     svc #0
 EOF
 
-aarch64-linux-gnu-gcc -static -nostdlib test.s -o test_program
-qemu-aarch64-static -d in_asm -D trace.log ./test_program
+aarch64-linux-gnu-gcc -static -nostdlib /tmp/test.s -o /tmp/test_program
 
-# 导入数据库
-cd ~/workhome/inst_db
-cp /tmp/trace.log .
-python examples/qemu_import_example.py
+# 2. 生成 QEMU 跟踪
+qemu-aarch64-static -d in_asm -D /tmp/trace.log /tmp/test_program
+
+# 3. 导入数据库
+python -c "from inst_db.parsers import TraceImporter; TraceImporter('/tmp/trace.log', 'trace.db').import_trace()"
 ```
 
 ## QEMU 输出格式
