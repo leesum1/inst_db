@@ -38,7 +38,7 @@ class TestInstructionDB:
             sequence_id=1,
         )
         assert instr.sequence_id is not None
-        assert instr.pc == 0x1000
+        assert instr.pc == "0x0000000000001000"
         assert instr.sequence_id == 1
         assert instr.instruction_code == bytes.fromhex("20000101aa")
 

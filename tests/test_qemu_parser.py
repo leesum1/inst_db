@@ -137,9 +137,9 @@ OBJD-T: a00080d2410180d20200018b
             instructions = db.get_instruction_trace()
             
             assert len(instructions) == 3
-            assert instructions[0].pc == 0x4000d4
-            assert instructions[1].pc == 0x4000d8
-            assert instructions[2].pc == 0x4000dc
+            assert instructions[0].pc == "0x00000000004000d4"
+            assert instructions[1].pc == "0x00000000004000d8"
+            assert instructions[2].pc == "0x00000000004000dc"
             
             # Check disassembly
             assert "mov" in instructions[0].disassembly

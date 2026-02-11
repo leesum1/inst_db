@@ -94,6 +94,36 @@ python scripts/runners/run_qemu_trace.py qsort --no-stats
 - `--no-import` - 跳过导入到数据库
 - `--no-stats` - 跳过打印统计信息
 
+## Spike (RISC-V) 跟踪导入
+
+RISC-V 支持使用 Spike 执行日志作为指令流输入（无 `riscv-pk` 模式）。
+
+```python
+from inst_db.parsers import SpikeTraceImporter
+
+SpikeTraceImporter("riscv_trace.log", "riscv_trace.db").import_trace()
+```
+
+### 使用 Spike 跟踪脚本（无 `pk`）
+
+```bash
+# 一键执行：构建 + Spike 跟踪 + 导入（默认运行 1 秒，默认导入上限 50000）
+uv run python scripts/runners/run_spike_trace.py
+
+# 自定义 Spike 运行时长（秒）
+uv run python scripts/runners/run_spike_trace.py --run-seconds 0.5
+
+# 自定义导入上限
+uv run python scripts/runners/run_spike_trace.py --import-limit 10000
+
+# 只导入已有日志
+uv run python scripts/runners/run_spike_trace.py --no-build --no-trace --import-limit 20000
+```
+
+脚本依赖：
+- `riscv64-linux-gnu-gcc`
+- `spike`
+
 ## Web UI 可视化
 
 项目提供两种可视化方案：

@@ -3,8 +3,8 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
-from inst_db.database.connection import DatabaseManager, init_database
-from inst_db.disassembler.arm64 import ARM64Disassembler
+from inst_db.database.connection import init_database
+from inst_db.disassembler import ARM64Disassembler, RISCVDisassembler
 from inst_db.models.instruction import (
     Instruction,
     RegisterDependency,
@@ -15,20 +15,40 @@ from inst_db.models.instruction import (
 class InstructionDB:
     """High-level API for managing instruction tracing data."""
 
-    def __init__(self, database_url: str):
+    def __init__(self, database_url: str, architecture: str = "arm64"):
         """
         Initialize the instruction database.
 
         Args:
             database_url: SQLAlchemy database URL (e.g., "sqlite:///trace.db")
+            architecture: Instruction set architecture ("arm64" or "riscv64")
         """
         self.db_path: Optional[str] = None
-        use_in_memory = database_url.startswith("sqlite")
-        if use_in_memory:
+        use_in_memory = self._should_use_in_memory(database_url)
+        if not use_in_memory:
             self.db_path = self._extract_sqlite_path(database_url)
 
         self.db_manager = init_database(database_url, use_in_memory=use_in_memory)
-        self.disassembler = ARM64Disassembler()
+        self.disassembler = self._create_disassembler(architecture)
+
+    @staticmethod
+    def _create_disassembler(architecture: str):
+        normalized_arch = architecture.strip().lower()
+        if normalized_arch == "arm64":
+            return ARM64Disassembler()
+        if normalized_arch == "riscv64":
+            return RISCVDisassembler()
+        raise ValueError(
+            f"Unsupported architecture: {architecture}. Supported: arm64, riscv64"
+        )
+
+    @staticmethod
+    def _should_use_in_memory(database_url: str) -> bool:
+        normalized = database_url.strip().lower()
+        return normalized in {
+            "sqlite:///:memory:",
+            "sqlite+pysqlite:///:memory:",
+        }
 
     @staticmethod
     def _to_hex_text(value: int | str) -> str:
