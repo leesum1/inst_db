@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""Build and run QEMU trace for ARM64 demos, then import into the database."""
+"""Build and run QEMU execlog traces, then import into the database."""
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 ROOT = Path(__file__).resolve().parents[2]
 TMP_DIR = ROOT / "tmp"
 SRC_DIR = Path(__file__).resolve().parent / "source"
+QEMU_LOG_DIR = ROOT / "qemu_log"
+QEMU_PLUGIN = QEMU_LOG_DIR / "libexeclog.so"
+
+QEMU_BINS = {
+    "arm64": QEMU_LOG_DIR / "qemu-aarch64",
+    "riscv64": QEMU_LOG_DIR / "qemu-riscv64",
+}
 
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -19,21 +27,36 @@ sys.path.insert(0, str(ROOT / "src"))
 DEMOS = {
     "qsort": {
         "name": "Quicksort",
+        "architecture": "arm64",
         "src_file": "qsort_demo.c",
         "bin_file": "qsort_demo",
-        "trace_file": "qsort_trace.log",
+        "trace_file": "qsort_execlog.log",
         "db_file": "quicksort_trace.db",
+        "compiler": "aarch64-linux-gnu-gcc",
         "compile_flags": [],
         "qemu_flags": [],
     },
     "sve": {
         "name": "SVE",
+        "architecture": "arm64",
         "src_file": "sve_demo.c",
         "bin_file": "sve_demo",
-        "trace_file": "sve_trace.log",
+        "trace_file": "sve_execlog.log",
         "db_file": "sve_trace.db",
+        "compiler": "aarch64-linux-gnu-gcc",
         "compile_flags": ["-march=armv8.2-a+sve"],
         "qemu_flags": ["-cpu", "max,sve=on"],
+    },
+    "riscv_min": {
+        "name": "RISC-V Minimal",
+        "architecture": "riscv64",
+        "src_file": "riscv_min_demo.c",
+        "bin_file": "riscv_min_demo",
+        "trace_file": "riscv_min_execlog.log",
+        "db_file": "riscv_min_trace.db",
+        "compiler": "riscv64-linux-gnu-gcc",
+        "compile_flags": ["-march=rv64gc", "-mabi=lp64d"],
+        "qemu_flags": [],
     },
 }
 
@@ -54,6 +77,14 @@ def check_tool(name: str) -> None:
         raise RuntimeError(f"Required tool not found: {name}")
 
 
+def check_executable(path: Path) -> None:
+    """Check if a local executable file exists and is runnable."""
+    if not path.exists():
+        raise FileNotFoundError(f"Required executable not found: {path}")
+    if not os.access(path, os.X_OK):
+        raise RuntimeError(f"File is not executable: {path}")
+
+
 def build_binary(config: Dict[str, Any]) -> None:
     """Build the binary from source."""
     src_file = SRC_DIR / config["src_file"]
@@ -63,62 +94,72 @@ def build_binary(config: Dict[str, Any]) -> None:
         raise FileNotFoundError(f"Source file not found: {src_file}")
 
     cmd = [
-        "aarch64-linux-gnu-gcc",
+        config["compiler"],
         "-static",
         "-O0",
     ]
-    
+
     # Add demo-specific compile flags
     cmd.extend(config["compile_flags"])
-    
-    cmd.extend([
-        str(src_file),
-        "-o",
-        str(bin_file),
-    ])
-    
+
+    cmd.extend(
+        [
+            str(src_file),
+            "-o",
+            str(bin_file),
+        ]
+    )
+
     subprocess.run(cmd, check=True)
 
 
 def run_qemu_trace(config: Dict[str, Any]) -> None:
-    """Run QEMU trace on the binary."""
+    """Run QEMU execlog trace on the binary."""
     bin_file = TMP_DIR / config["bin_file"]
     trace_file = TMP_DIR / config["trace_file"]
+    qemu_bin = QEMU_BINS[config["architecture"]]
 
-    cmd = ["qemu-aarch64-static"]
-    
+    cmd = [str(qemu_bin)]
+
     # Add demo-specific QEMU flags
     cmd.extend(config["qemu_flags"])
-    
-    cmd.extend([
-        "-one-insn-per-tb",
-        "-d",
-        "in_asm,exec,cpu,nochain",
-        "-D",
-        str(trace_file),
-        str(bin_file),
-    ])
-    
+
+    cmd.extend(
+        [
+            "-d",
+            "plugin",
+            "-D",
+            str(trace_file),
+            "-plugin",
+            str(QEMU_PLUGIN),
+            str(bin_file),
+        ]
+    )
+
     subprocess.run(cmd, check=True)
 
 
 def import_trace(config: Dict[str, Any]) -> int:
     """Import the trace into the database."""
     from inst_db.parsers import TraceImporter
-    
+
     trace_file = TMP_DIR / config["trace_file"]
     db_file = TMP_DIR / config["db_file"]
 
-    importer = TraceImporter(str(trace_file), str(db_file))
+    importer = TraceImporter(
+        str(trace_file),
+        str(db_file),
+        architecture=config["architecture"],
+    )
     return importer.import_trace()
 
 
 def print_stats(config: Dict[str, Any]) -> None:
     """Print trace statistics."""
     from inst_db.api import InstructionDB
-    
+
     db_file = TMP_DIR / config["db_file"]
-    db = InstructionDB(f"sqlite:///{db_file}")
+    db = InstructionDB(f"sqlite:///{db_file}", architecture=config["architecture"])
     instructions = db.get_instruction_trace()
 
     print("\n=== Trace Statistics ===")
@@ -140,7 +181,7 @@ def print_stats(config: Dict[str, Any]) -> None:
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Build and run QEMU trace for ARM64 demos."
+        description="Build and run QEMU execlog traces for ARM64/RISC-V demos."
     )
     parser.add_argument(
         "demo",
@@ -170,17 +211,20 @@ def main() -> int:
 
     args = parser.parse_args()
     config = DEMOS[args.demo]
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
-        check_tool("aarch64-linux-gnu-gcc")
-        check_tool("qemu-aarch64-static")
-
         if not args.no_build:
+            check_tool(config["compiler"])
             print(f"Building {config['name']} demo...")
             build_binary(config)
 
         if not args.no_trace:
-            print("Running QEMU trace...")
+            check_executable(QEMU_BINS[config["architecture"]])
+            if not QEMU_PLUGIN.exists():
+                raise FileNotFoundError(f"QEMU plugin not found: {QEMU_PLUGIN}")
+
+            print("Running QEMU execlog trace...")
             run_qemu_trace(config)
 
         if not args.no_import:

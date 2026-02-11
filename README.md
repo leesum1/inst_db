@@ -58,17 +58,20 @@ db.add_register_dependency(
 )
 ```
 
-## QEMU 跟踪导入
+## QEMU execlog 跟踪导入
 
 ```python
 from inst_db.parsers import TraceImporter
 
-TraceImporter("trace.log", "trace.db").import_trace()
+TraceImporter("trace.log", "trace.db", architecture="arm64").import_trace()
+
+# RISC-V
+TraceImporter("trace.log", "trace.db", architecture="riscv64").import_trace()
 ```
 
 ### 使用跟踪脚本
 
-统一的跟踪脚本支持多个演示程序：
+统一的 QEMU `execlog` 跟踪脚本支持多个演示程序：
 
 ```bash
 # 运行 quicksort 演示的跟踪
@@ -76,6 +79,9 @@ python scripts/runners/run_qemu_trace.py qsort
 
 # 运行 SVE 演示的跟踪
 python scripts/runners/run_qemu_trace.py sve
+
+# 运行 RISC-V 最小演示的跟踪
+python scripts/runners/run_qemu_trace.py riscv_min
 
 # 跳过构建，只运行跟踪和导入
 python scripts/runners/run_qemu_trace.py qsort --no-build
@@ -88,11 +94,16 @@ python scripts/runners/run_qemu_trace.py qsort --no-stats
 ```
 
 参数说明：
-- `qsort|sve` - 选择要运行的演示程序
+- `qsort|sve|riscv_min` - 选择要运行的演示程序
 - `--no-build` - 跳过二进制文件构建
 - `--no-trace` - 跳过 QEMU 跟踪执行
 - `--no-import` - 跳过导入到数据库
 - `--no-stats` - 跳过打印统计信息
+
+脚本依赖：
+- 编译器：`aarch64-linux-gnu-gcc`（ARM64）/ `riscv64-linux-gnu-gcc`（RISC-V）
+- QEMU 二进制：`qemu_log/qemu-aarch64`、`qemu_log/qemu-riscv64`
+- 插件：`qemu_log/libexeclog.so`
 
 ## Spike (RISC-V) 跟踪导入
 

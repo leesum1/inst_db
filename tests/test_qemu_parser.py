@@ -1,184 +1,185 @@
-"""Tests for QEMU trace parser."""
+"""Tests for QEMU execlog parser and importer."""
 
-import pytest
 import tempfile
 from pathlib import Path
 
-from inst_db.parsers.qemu_trace import QEMUTraceParser, TraceImporter
 from inst_db.api import InstructionDB
+from inst_db.parsers.qemu_trace import QEMUTraceParser, TraceImporter
 
 
-class TestQEMUTraceParser:
-    """Test QEMU trace parser functionality."""
+class TestQEMUExeclogParser:
+    """Test QEMU execlog parser functionality."""
 
-    def test_parse_pc(self):
-        """Test PC address parsing."""
-        parser = QEMUTraceParser.__new__(QEMUTraceParser)
-        
-        assert parser._parse_pc("0x004000d4:") == 0x4000d4
-        assert parser._parse_pc("0x0000000000400078:") == 0x400078
-        assert parser._parse_pc("invalid") is None
-
-    def test_parse_instructions(self):
-        """Test instruction parsing."""
-        parser = QEMUTraceParser.__new__(QEMUTraceParser)
-        
-        # Test with known QEMU output
-        hex_data = "a00080d2410180d20200018b"
-        instructions = list(parser._parse_instructions(hex_data))
-        
-        assert len(instructions) == 3
-        assert instructions[0].hex() == "a00080d2"  # mov x0, #5
-        assert instructions[1].hex() == "410180d2"  # mov x1, #10
-        assert instructions[2].hex() == "0200018b"  # add x2, x0, x1
-
-    def test_parse_incomplete_instruction(self):
-        """Test handling of incomplete instructions."""
-        parser = QEMUTraceParser.__new__(QEMUTraceParser)
-        
-        # Incomplete instruction (< 8 chars)
-        hex_data = "a00080d2410180"
-        instructions = list(parser._parse_instructions(hex_data))
-        
-        assert len(instructions) == 1  # Only first complete instruction
-
-    def test_parse_file(self):
-        """Test parsing a complete trace file."""
-        # Create a temporary trace file
-        trace_content = """----------------
-IN: 
-0x004000d4:  
-OBJD-T: a00080d2410180d20200018b
-OBJD-T: ff4300d1e20300f9
+    def test_parse_arm64_execlog_file(self):
+        trace_content = """0, 0x400580, 0xd28000a0, \"mov x0, #5\"
+0, 0x400584, 0xd2800141, \"mov x1, #10\"
+0, 0x400588, 0x8b010002, \"add x2, x0, x1\"
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
             f.write(trace_content)
             trace_file = f.name
-        
+
         try:
-            parser = QEMUTraceParser(trace_file)
+            parser = QEMUTraceParser(trace_file, architecture="arm64")
             results = list(parser.parse())
-            
-            assert len(results) == 5
-            
-            # Check PC addresses
-            assert results[0][0] == 0x4000d4
-            assert results[1][0] == 0x4000d8  # PC + 4
-            assert results[2][0] == 0x4000dc  # PC + 8
-            assert results[3][0] == 0x4000e0  # PC + 12
-            assert results[4][0] == 0x4000e4  # PC + 16
-            
-            # Check instruction bytes
+
+            assert len(results) == 3
+            assert results[0][0] == 0x400580
+            assert results[1][0] == 0x400584
+            assert results[2][0] == 0x400588
+
             assert results[0][1].hex() == "a00080d2"
             assert results[1][1].hex() == "410180d2"
             assert results[2][1].hex() == "0200018b"
-        
         finally:
             Path(trace_file).unlink()
 
-    def test_parse_multiple_translation_blocks(self):
-        """Test parsing multiple translation blocks."""
-        trace_content = """----------------
-IN: 
-0x004000d4:  
-OBJD-T: a00080d2
-
-----------------
-IN: 
-0x004000d8:  
-OBJD-T: 410180d2
+    def test_parse_riscv_execlog_file(self):
+        trace_content = """0, 0x1038c, 0x24000ef, \"jal ra,36\"
+0, 0x10390, 0x87aa, \"mv a5,a0\"
+0, 0x10392, 0x517, \"auipc a0,0\"
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
             f.write(trace_content)
             trace_file = f.name
-        
+
         try:
-            parser = QEMUTraceParser(trace_file)
+            parser = QEMUTraceParser(trace_file, architecture="riscv64")
             results = list(parser.parse())
-            
-            assert len(results) == 2
-            assert results[0][0] == 0x4000d4
-            assert results[1][0] == 0x4000d8
-        
+
+            assert len(results) == 3
+            assert results[0][0] == 0x1038C
+            assert results[1][0] == 0x10390
+            assert results[2][0] == 0x10392
+
+            assert results[0][1].hex() == "ef004002"
+            assert results[1][1].hex() == "aa87"
+            assert results[2][1].hex() == "17050000"
+        finally:
+            Path(trace_file).unlink()
+
+    def test_skip_non_execlog_lines(self):
+        trace_content = """noise line
+0, 0x400580, 0xd503201f, \"nop\"
+malformed, line
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write(trace_content)
+            trace_file = f.name
+
+        try:
+            parser = QEMUTraceParser(trace_file, architecture="arm64")
+            results = list(parser.parse())
+
+            assert len(results) == 1
+            assert results[0][0] == 0x400580
+            assert results[0][1].hex() == "1f2003d5"
+        finally:
+            Path(trace_file).unlink()
+
+    def test_parse_with_registers_returns_none_state(self):
+        trace_content = '0, 0x400580, 0xd503201f, "nop"\n'
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write(trace_content)
+            trace_file = f.name
+
+        try:
+            parser = QEMUTraceParser(trace_file, architecture="arm64")
+            results = list(parser.parse_with_registers())
+            assert len(results) == 1
+            assert results[0][2] is None
         finally:
             Path(trace_file).unlink()
 
 
 class TestTraceImporter:
-    """Test trace importer functionality."""
+    """Test execlog importer functionality."""
 
-    def test_import_trace(self):
-        """Test importing trace into database."""
-        # Create a simple trace file
-        trace_content = """----------------
-IN: 
-0x004000d4:  
-OBJD-T: a00080d2410180d20200018b
+    def test_import_arm64_trace(self):
+        trace_content = """0, 0x400580, 0xd28000a0, \"mov x0, #5\"
+0, 0x400584, 0xd2800141, \"mov x1, #10\"
+0, 0x400588, 0x8b010002, \"add x2, x0, x1\"
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
             f.write(trace_content)
             trace_file = f.name
-        
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_file = f.name
-        
+
         try:
-            # Import trace
-            importer = TraceImporter(trace_file, db_file)
+            importer = TraceImporter(trace_file, db_file, architecture="arm64")
             count = importer.import_trace()
-            
+
             assert count == 3
-            
-            # Verify database contents
-            db = InstructionDB(f"sqlite:///{db_file}")
+
+            db = InstructionDB(f"sqlite:///{db_file}", architecture="arm64")
             instructions = db.get_instruction_trace()
-            
+
             assert len(instructions) == 3
-            assert instructions[0].pc == "0x00000000004000d4"
-            assert instructions[1].pc == "0x00000000004000d8"
-            assert instructions[2].pc == "0x00000000004000dc"
-            
-            # Check disassembly
+            assert instructions[0].pc == "0x0000000000400580"
+            assert instructions[1].pc == "0x0000000000400584"
+            assert instructions[2].pc == "0x0000000000400588"
             assert "mov" in instructions[0].disassembly
-            assert "x0" in instructions[0].disassembly
-            
-            # Check register dependencies
-            deps = db.get_register_dependencies(instructions[0].sequence_id)
-            writes = [d.register_name for d in deps if d.is_dst]
-            assert "x0" in writes
-        
+        finally:
+            Path(trace_file).unlink()
+            Path(db_file).unlink()
+
+    def test_import_riscv_trace(self):
+        trace_content = """0, 0x1038c, 0x24000ef, \"jal ra,36\"
+0, 0x10390, 0x87aa, \"mv a5,a0\"
+0, 0x10392, 0x517, \"auipc a0,0\"
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write(trace_content)
+            trace_file = f.name
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_file = f.name
+
+        try:
+            importer = TraceImporter(trace_file, db_file, architecture="riscv64")
+            count = importer.import_trace()
+
+            assert count == 3
+
+            db = InstructionDB(f"sqlite:///{db_file}", architecture="riscv64")
+            instructions = db.get_instruction_trace()
+            assert len(instructions) == 3
+            assert instructions[0].pc == "0x000000000001038c"
+            assert instructions[1].pc == "0x0000000000010390"
         finally:
             Path(trace_file).unlink()
             Path(db_file).unlink()
 
     def test_import_with_limit(self):
-        """Test importing with max_instructions limit."""
-        trace_content = """----------------
-IN: 
-0x004000d4:  
-OBJD-T: a00080d2410180d20200018bff4300d1
+        trace_content = """0, 0x400580, 0xd28000a0, \"mov x0, #5\"
+0, 0x400584, 0xd2800141, \"mov x1, #10\"
+0, 0x400588, 0x8b010002, \"add x2, x0, x1\"
 """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
             f.write(trace_content)
             trace_file = f.name
-        
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_file = f.name
-        
+
         try:
-            importer = TraceImporter(trace_file, db_file)
+            importer = TraceImporter(trace_file, db_file, architecture="arm64")
             count = importer.import_trace(max_instructions=2)
-            
+
             assert count == 2
-            
-            db = InstructionDB(f"sqlite:///{db_file}")
+
+            db = InstructionDB(f"sqlite:///{db_file}", architecture="arm64")
             instructions = db.get_instruction_trace()
             assert len(instructions) == 2
-        
         finally:
             Path(trace_file).unlink()
             Path(db_file).unlink()
