@@ -1,0 +1,15 @@
+# Build outputs
+build/
+logs/
+
+# Local qemu build artifacts
+qemu-aarch64
+qemu-riscv64
+libexeclog.so
+
+# Local demo artifacts
+qsort_demo
+qsort_demo.c
+qsort_execlog.txt
+qsort_execlog_user_text.txt
+qsort_program_output.txt
