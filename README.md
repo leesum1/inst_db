@@ -105,6 +105,44 @@ python scripts/runners/run_qemu_trace.py qsort --no-stats
 - QEMU 二进制：`qemu_log/build/master/qemu-aarch64`、`qemu_log/build/master/qemu-riscv64`
 - 插件：`qemu_log/build/master/libexeclog.so`
 
+## DB 查询工具（独立 Python 脚本）
+
+新增一组基于 SQL 的离线分析工具，输入仅为 `.db` 文件，支持表格输出和 `--json`。
+
+```bash
+# 1) 统一依赖链查询（默认 reg；根节点有访存时自动切换 mem）
+uv run python scripts/db_tools/query_reg_dep_chain.py tmp/quicksort_trace.db --seq-id 4420 --max-depth 10
+
+# 1.1) 指令寄存器依赖树形输出（便于快速浏览链路）
+uv run python scripts/db_tools/query_reg_dep_chain.py tmp/quicksort_trace.db --seq-id 4420 --max-depth 10 --tree
+
+# 1.2) 强制使用 mem 引擎（可选）
+uv run python scripts/db_tools/query_reg_dep_chain.py tmp/quicksort_trace.db --seq-id 4420 --mode mem --max-depth 10 --tree
+
+# 1.3) reg 引擎下子节点策略（默认 load_to_mem）
+uv run python scripts/db_tools/query_reg_dep_chain.py tmp/quicksort_trace.db --seq-id 4420 --mode reg --reg-query-logic load_to_mem
+uv run python scripts/db_tools/query_reg_dep_chain.py tmp/quicksort_trace.db --seq-id 4420 --mode reg --reg-query-logic reg_only
+
+# 2) 内存 RAW 依赖链（READ 追最近 WRITE）
+uv run python scripts/db_tools/query_mem_dep_chain.py tmp/quicksort_trace.db --seq-id 4420 --max-depth 10
+
+# 2.1) 内存 RAW 依赖树形输出
+uv run python scripts/db_tools/query_mem_dep_chain.py tmp/quicksort_trace.db --seq-id 4420 --max-depth 10 --tree
+
+# 3) 指令自修改检测（地址命中 + 字节变化）
+uv run python scripts/db_tools/query_self_modifying.py tmp/quicksort_trace.db --window 2000
+
+# 4) Loop 检测（重复窗口 + 回边混合）
+uv run python scripts/db_tools/detect_loops.py tmp/quicksort_trace.db --min-iter 3 --min-body 2 --max-body 64
+```
+
+常用参数：
+- `--json`：JSON 输出
+- `--limit N`：限制输出条数（默认 `100`）
+- `--verbose`：输出额外诊断信息
+
+详细说明见：`docs/DB_TOOLS.md`
+
 ## Spike (RISC-V) 跟踪导入
 
 RISC-V 支持使用 Spike 执行日志作为指令流输入（无 `riscv-pk` 模式）。

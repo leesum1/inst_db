@@ -283,6 +283,22 @@ class TestDisassembly:
                 f"Register: {dep.register_name}, is_src={dep.is_src}, is_dst={dep.is_dst}"
             )
 
+    def test_memory_base_register_is_extracted_as_source(self, temp_db):
+        """Load/store style memory operands should include base register as source."""
+        instr = temp_db.add_instruction(
+            pc=0x410188,
+            instruction_code=bytes.fromhex("2070404c"),  # ld1 {v0.16b}, [x1]
+            sequence_id=1,
+        )
+
+        deps = temp_db.get_register_dependencies(instr.sequence_id)
+        dep_map = {(d.register_name, d.is_src, d.is_dst) for d in deps}
+
+        # v0 is both read and written by this instruction
+        assert ("v0", True, True) in dep_map
+        # x1 is the address base register and should be a source register
+        assert ("x1", True, False) in dep_map
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

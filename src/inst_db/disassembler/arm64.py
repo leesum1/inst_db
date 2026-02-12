@@ -1,6 +1,6 @@
 """ARM64 disassembler using Capstone with semantic analysis."""
 
-from typing import Tuple, List, Optional, Set
+from typing import List, Optional, Set
 from dataclasses import dataclass
 
 from inst_db.utils import normalize_reg_name
@@ -10,10 +10,6 @@ try:
         Cs,
         CS_ARCH_ARM64,
         CS_MODE_ARM,
-        CS_OP_REG,
-        CS_OP_FP,
-        CS_AC_READ,
-        CS_AC_WRITE,
     )
 except ImportError:
     raise ImportError(
@@ -48,13 +44,35 @@ class ARM64Disassembler:
         # Don't skip data
         self.cs.skipdata = False
 
+    def _extract_register_sets(self, instr) -> tuple[Set[str], Set[str]]:
+        """Extract normalized read/write register sets from Capstone access APIs."""
+        try:
+            read_ids, write_ids = instr.regs_access()
+        except Exception:
+            # Fallback to attribute form if regs_access() is unavailable.
+            read_ids = getattr(instr, "regs_read", [])
+            write_ids = getattr(instr, "regs_write", [])
+
+        regs_read = {
+            name
+            for reg_id in read_ids
+            if (name := normalize_reg_name(self.cs.reg_name(reg_id)))
+        }
+        regs_write = {
+            name
+            for reg_id in write_ids
+            if (name := normalize_reg_name(self.cs.reg_name(reg_id)))
+        }
+
+        return regs_read, regs_write
+
     def disassemble(
         self, instruction_bytes: bytes, address: int = 0
     ) -> Optional[DisassemblyResult]:
         """
         Disassemble a single instruction with semantic analysis.
 
-        Uses Capstone to extract register read/write semantics by analyzing operand access flags.
+        Uses Capstone to extract register read/write semantics.
 
         Args:
             instruction_bytes: Raw instruction bytes (usually 4 bytes for ARM64)
@@ -72,24 +90,10 @@ class ARM64Disassembler:
 
             instr = results[0]
             full_text = f"{instr.mnemonic} {instr.op_str}".strip()
+            
+        
 
-            # 通过分析操作数来提取寄存器依赖
-            regs_read = set()
-            regs_write = set()
-
-            for operand in instr.operands:
-                # 处理寄存器操作数（整数寄存器和浮点寄存器）
-                if operand.type == CS_OP_REG or operand.type == CS_OP_FP:
-                    reg_name = normalize_reg_name(self.cs.reg_name(operand.reg))
-                    if not reg_name:
-                        continue
-
-                    # 根据访问标志（CS_AC_READ, CS_AC_WRITE）分类
-                    access = operand.access
-                    if access & CS_AC_READ:
-                        regs_read.add(reg_name)
-                    if access & CS_AC_WRITE:
-                        regs_write.add(reg_name)
+            regs_read, regs_write = self._extract_register_sets(instr)
 
             return DisassemblyResult(
                 address=instr.address,
@@ -122,22 +126,7 @@ class ARM64Disassembler:
             for instr in self.cs.disasm(instruction_bytes, start_address):
                 full_text = f"{instr.mnemonic} {instr.op_str}".strip()
 
-                # 通过分析操作数来提取寄存器依赖
-                regs_read = set()
-                regs_write = set()
-
-                for operand in instr.operands:
-                    # 处理寄存器操作数（整数寄存器和浮点寄存器）
-                    if operand.type == CS_OP_REG or operand.type == CS_OP_FP:
-                        reg_name = normalize_reg_name(self.cs.reg_name(operand.reg))
-                        if not reg_name:
-                            continue
-
-                        access = operand.access
-                        if access & CS_AC_READ:
-                            regs_read.add(reg_name)
-                        if access & CS_AC_WRITE:
-                            regs_write.add(reg_name)
+                regs_read, regs_write = self._extract_register_sets(instr)
 
                 results.append(
                     DisassemblyResult(
