@@ -3,7 +3,6 @@
 import pytest
 import os
 import tempfile
-from pathlib import Path
 
 import sys
 
@@ -11,10 +10,6 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from inst_db.api import InstructionDB
-from inst_db.models.instruction import (
-    Instruction,
-    RegisterDependency,
-)
 
 
 @pytest.fixture
@@ -181,7 +176,7 @@ class TestInstructionDB:
             sequence_id=1,
         )
         
-        reg_dep = temp_db.add_register_dependency(
+        temp_db.add_register_dependency(
             sequence_id=instr.sequence_id,
             register_name="x0",
             is_src=False,
@@ -194,7 +189,10 @@ class TestInstructionDB:
             virtual_address=0x7fff0000,
             physical_address=0x3fff0000,
             data_length=4,
+            memory_value="0x0000002a",
         )
+
+        assert mem_op.memory_value == "0x0000002a"
         
         # Delete instruction
         temp_db.delete_instruction(instr.sequence_id)

@@ -339,7 +339,8 @@ const app = {
                 html += `<strong>${mo.operation_type}</strong><br>`;
                 html += `虚拟地址: ${mo.virtual_address || 'N/A'}<br>`;
                 html += `物理地址: ${mo.physical_address || 'N/A'}<br>`;
-                html += `数据长度: ${mo.data_length} bytes`;
+                html += `数据长度: ${mo.data_length} bytes<br>`;
+                html += `内存值: ${mo.memory_value || 'N/A'}`;
                 html += `</li>`;
             });
             html += '</ul></div>';

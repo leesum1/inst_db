@@ -1,164 +1,117 @@
-# QEMU 指令流跟踪快速入门
+# QEMU execlog 指令流跟踪快速入门
 
 ## 功能简介
 
-从 QEMU `-d in_asm` 输出解析指令流，并导入到数据库：
-- ✅ 自动提取 PC 地址和指令字节码
-- ✅ 自动反汇编（使用 Capstone）
+从 QEMU `execlog` 插件输出解析指令流，并导入数据库：
+- ✅ 解析 PC 与指令机器码
+- ✅ 自动反汇编（Capstone）
 - ✅ 自动提取寄存器依赖（读/写）
-- ✅ 支持浮点寄存器（CS_OP_FP）
+- ✅ 解析并入库内存访问（类型/地址/长度/值）
+- ✅ 支持 ARM64 与 RISC-V
 
 ## 快速使用
 
-### 1. 生成 QEMU 跟踪文件
+### 1) 生成 QEMU execlog 日志
 
 ```bash
-# 运行 ARM64 程序并生成跟踪
-qemu-aarch64-static -d in_asm -D trace.log ./your_program
+# ARM64
+qemu_log/build/master/qemu-aarch64 \
+  -d plugin \
+  -D trace.log \
+  -plugin qemu_log/build/master/libexeclog.so \
+  ./your_arm64_program
 
-# 或使用提供的脚本
-./scripts/generate_qemu_trace.sh ./your_program trace.log
+# RISC-V
+qemu_log/build/master/qemu-riscv64 \
+  -d plugin \
+  -D trace.log \
+  -plugin qemu_log/build/master/libexeclog.so \
+  ./your_riscv64_program
 ```
 
-### 2. 导入到数据库
+或直接使用统一脚本：
+
+```bash
+uv run python scripts/runners/run_qemu_trace.py qsort
+uv run python scripts/runners/run_qemu_trace.py sve
+uv run python scripts/runners/run_qemu_trace.py riscv_min
+```
+
+### 2) 导入数据库
 
 ```python
 from inst_db.parsers import TraceImporter
 
-# 导入跟踪文件
-importer = TraceImporter('trace.log', 'mydb.db')
-count = importer.import_trace()
-
+count = TraceImporter('trace.log', 'trace.db', architecture='arm64').import_trace()
 print(f"Imported {count} instructions")
 ```
 
-### 3. 查询和分析
+### 3) 查询与分析
 
 ```python
 from inst_db.api import InstructionDB
 
-db = InstructionDB('sqlite:///mydb.db')
+db = InstructionDB('sqlite:///trace.db', architecture='arm64')
 
-# 获取指令序列
-for instr in db.get_instruction_trace(limit=20):
-    print(f"[{instr.sequence_id}] {instr.pc:#x}: {instr.disassembly}")
-    
-    # 查看寄存器依赖
-    deps = db.get_register_dependencies(instr.id)
-    reads = [d.register_name for d in deps if d.is_src]
-    writes = [d.register_name for d in deps if d.is_dst]
-    
-    if reads:
-        print(f"  Reads: {', '.join(reads)}")
-    if writes:
-        print(f"  Writes: {', '.join(writes)}")
+for instr in db.get_instruction_trace()[:20]:
+    print(f"[{instr.sequence_id}] {instr.pc}: {instr.disassembly}")
+
+mem_ops = db.get_memory_operations(1)
+for mem in mem_ops:
+    print(mem.operation_type, mem.virtual_address, mem.data_length, mem.memory_value)
 ```
 
-## 完整流程示例
+## execlog 日志格式
 
-```bash
-# 1. 生成测试程序
-cat > /tmp/test.s << 'EOF'
-.global _start
-.text
-_start:
-    mov x0, #5
-    mov x1, #10
-    add x2, x0, x1
-    mov x0, #0
-    mov x8, #93
-    svc #0
-EOF
+解析器支持如下行格式（可含多次内存操作）：
 
-aarch64-linux-gnu-gcc -static -nostdlib /tmp/test.s -o /tmp/test_program
-
-# 2. 生成 QEMU 跟踪
-qemu-aarch64-static -d in_asm -D /tmp/trace.log /tmp/test_program
-
-# 3. 导入数据库
-python -c "from inst_db.parsers import TraceImporter; TraceImporter('/tmp/trace.log', 'trace.db').import_trace()"
+```text
+0, 0x400590, 0xf94003e1, "ldr x1, [sp]", m=L8, v=0x0000000000000001, va=0x7f...
+0, 0x4008e0, 0xa9b77bfd, "stp ...", m=S16, v=0x..., va=0x7f..., m=S8, v=0x..., va=0x7f...
 ```
 
-## QEMU 输出格式
-
-解析器处理的格式：
-
-```
-----------------
-IN: 
-0x004000d4:  
-OBJD-T: a00080d2410180d20200018bff4300d1
-OBJD-T: e20300f9e30340f9000080d2a80b80d2
-OBJD-T: 010000d4
-```
-
-- `0x004000d4:` - 起始 PC 地址
-- `OBJD-T: ...` - 指令字节码（小端序，ARM64 原生格式）
-- 每8个十六进制字符 = 1条指令（4字节）
+字段说明：
+- `m=L<size>` / `m=S<size>`：读/写与访问字节数
+- `v=0x...`：访问值（入库为 `memory_value`）
+- `va=0x...`：虚拟地址
+- `pa=0x...`（可选）：物理地址；缺失时使用 `va`
 
 ## API 参考
 
-### QEMUTraceParser
+### `QEMUTraceParser`
 
 ```python
 from inst_db.parsers import QEMUTraceParser
 
-parser = QEMUTraceParser('trace.log')
+parser = QEMUTraceParser('trace.log', architecture='arm64')
 
-# 解析所有指令
 for pc, instruction_bytes in parser.parse():
-    print(f"PC={pc:#x}, bytes={instruction_bytes.hex()}")
+    print(hex(pc), instruction_bytes.hex())
+
+for pc, insn, reg_state, memory_ops in parser.parse_with_details():
+    print(hex(pc), memory_ops)
 ```
 
-### TraceImporter
+### `TraceImporter`
 
 ```python
 from inst_db.parsers import TraceImporter
 
-importer = TraceImporter('trace.log', 'database.db')
-
-# 导入所有指令
-count = importer.import_trace()
-
-# 限制导入数量
-count = importer.import_trace(max_instructions=1000)
+importer = TraceImporter('trace.log', 'trace.db', architecture='riscv64')
+count = importer.import_trace(max_instructions=10000)
 ```
 
 ## 注意事项
 
-1. **字节序**：QEMU 输出已经是正确的小端序（ARM64 原生格式），解析器直接使用，无需转换
-
-2. **PC 地址推算**：解析器从 TB 起始地址开始，每条指令 PC += 4
-
-3. **寄存器依赖**：自动通过 Capstone 的 operand.access 标志提取
-
-4. **性能**：大文件建议使用 `max_instructions` 参数分批导入
+1. 必须使用 `-d plugin` + `-plugin .../libexeclog.so`
+2. ARM64 指令固定 4 字节；RISC-V 自动识别 2/4 字节指令
+3. 如果日志来自旧格式（仅 `load/store, addr`），不会产生 `memory_value`
 
 ## 故障排查
 
-### 反汇编失败
+### 导入后 `memory_operations` 为空
+- 确认日志行中包含 `m=...` 与 `v=...`（新格式）
+- 确认使用的是 `qemu_log/build/master/libexeclog.so`
 
-如果指令显示为 "unknown"，检查：
-- Capstone 版本（需要 >= 5.0）
-- 指令字节码是否完整（4字节）
-
-### 导入错误
-
-如果提示 "Could not parse SQLAlchemy URL"：
-- 确保数据库路径正确
-- 使用 `sqlite:///path/to/db.db` 格式
-
-### QEMU 跟踪为空
-
-检查：
-- 程序是否正常执行
-- 使用 `-d in_asm` 而不是 `-d exec`
-- 程序是否是 ARM64 架构
-
-## 扩展功能
-
-未来可能添加的功能：
-- [ ] 内存操作跟踪（从寄存器值推断）
-- [ ] 分支跟踪统计
-- [ ] 热点分析
-- [ ] 导出为其他格式（JSON, CSV）
+### 导入失败（URL 格式）
+- 数据库路径请用 `sqlite:///path/to/file.db`

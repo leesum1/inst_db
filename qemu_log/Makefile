@@ -1,6 +1,6 @@
-QEMU_AARCH64 ?= ./qemu-aarch64
-QEMU_RISCV64 ?= ./qemu-riscv64
-EXECLOG_PLUGIN ?= ./libexeclog.so
+QEMU_AARCH64 ?= ./build/master/qemu-aarch64
+QEMU_RISCV64 ?= ./build/master/qemu-riscv64
+EXECLOG_PLUGIN ?= ./build/master/libexeclog.so
 
 AARCH64_CC ?= aarch64-linux-gnu-gcc
 RISCV64_CC ?= riscv64-linux-gnu-gcc
@@ -34,11 +34,15 @@ test-aarch64-min: $(AARCH64_BIN) | $(LOG_DIR)
 	$(QEMU_AARCH64) -d plugin -D $(LOG_DIR)/aarch64_execlog.txt -plugin $(EXECLOG_PLUGIN) $(AARCH64_BIN) > $(LOG_DIR)/aarch64_stdout.txt
 	grep -q '^ok-aarch64$$' $(LOG_DIR)/aarch64_stdout.txt
 	test -s $(LOG_DIR)/aarch64_execlog.txt
+	rg -q 'm=L[0-9]+, v=0x[0-9a-f]+, va=0x[0-9a-f]+' $(LOG_DIR)/aarch64_execlog.txt
+	rg -q 'm=S[0-9]+, v=0x[0-9a-f]+, va=0x[0-9a-f]+' $(LOG_DIR)/aarch64_execlog.txt
 
 test-riscv64-min: $(RISCV64_BIN) | $(LOG_DIR)
 	$(QEMU_RISCV64) -d plugin -D $(LOG_DIR)/riscv64_execlog.txt -plugin $(EXECLOG_PLUGIN) $(RISCV64_BIN) > $(LOG_DIR)/riscv64_stdout.txt
 	grep -q '^ok-riscv64$$' $(LOG_DIR)/riscv64_stdout.txt
 	test -s $(LOG_DIR)/riscv64_execlog.txt
+	rg -q 'm=L[0-9]+, v=0x[0-9a-f]+, va=0x[0-9a-f]+' $(LOG_DIR)/riscv64_execlog.txt
+	rg -q 'm=S[0-9]+, v=0x[0-9a-f]+, va=0x[0-9a-f]+' $(LOG_DIR)/riscv64_execlog.txt
 
 show-logs:
 	test -f $(LOG_DIR)/aarch64_execlog.txt

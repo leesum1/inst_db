@@ -5,14 +5,11 @@ from typing import List, Optional
 from sqlalchemy import (
     String,
     Integer,
-    BigInteger,
     Boolean,
     LargeBinary,
     ForeignKey,
-    Enum,
 )
 from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column
-import enum
 
 # Create declarative base class
 Base = declarative_base()
@@ -97,6 +94,7 @@ class MemoryOperation(Base):
     virtual_address: Mapped[str] = mapped_column(String(32), nullable=False)
     physical_address: Mapped[str] = mapped_column(String(32), nullable=False)
     data_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    memory_value: Mapped[Optional[str]] = mapped_column(String(66), nullable=True)
 
     instruction: Mapped["Instruction"] = relationship(
         "Instruction",
@@ -106,7 +104,7 @@ class MemoryOperation(Base):
     def __repr__(self) -> str:
         return (
             "<MemoryOperation(id={id}, instruction_id={instruction_id}, "
-            "type={op_type}, vaddr={vaddr}, paddr={paddr}, len={length})>"
+            "type={op_type}, vaddr={vaddr}, paddr={paddr}, len={length}, value={value})>"
         ).format(
             id=self.id,
             instruction_id=self.instruction_id,
@@ -114,5 +112,5 @@ class MemoryOperation(Base):
             vaddr=self.virtual_address,
             paddr=self.physical_address,
             length=self.data_length,
+            value=self.memory_value,
         )
-

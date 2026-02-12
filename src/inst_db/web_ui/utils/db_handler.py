@@ -1,6 +1,5 @@
 """Database handler for web UI."""
 import sqlite3
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import json
 from inst_db.api import InstructionDB
@@ -153,6 +152,7 @@ class DBSession:
                     "virtual_address": mo.virtual_address,
                     "physical_address": mo.physical_address,
                     "data_length": mo.data_length,
+                    "memory_value": mo.memory_value,
                 }
                 for mo in mem_ops
             ],

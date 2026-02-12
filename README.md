@@ -102,8 +102,8 @@ python scripts/runners/run_qemu_trace.py qsort --no-stats
 
 脚本依赖：
 - 编译器：`aarch64-linux-gnu-gcc`（ARM64）/ `riscv64-linux-gnu-gcc`（RISC-V）
-- QEMU 二进制：`qemu_log/qemu-aarch64`、`qemu_log/qemu-riscv64`
-- 插件：`qemu_log/libexeclog.so`
+- QEMU 二进制：`qemu_log/build/master/qemu-aarch64`、`qemu_log/build/master/qemu-riscv64`
+- 插件：`qemu_log/build/master/libexeclog.so`
 
 ## Spike (RISC-V) 跟踪导入
 

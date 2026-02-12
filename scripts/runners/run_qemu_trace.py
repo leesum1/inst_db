@@ -13,11 +13,12 @@ ROOT = Path(__file__).resolve().parents[2]
 TMP_DIR = ROOT / "tmp"
 SRC_DIR = Path(__file__).resolve().parent / "source"
 QEMU_LOG_DIR = ROOT / "qemu_log"
-QEMU_PLUGIN = QEMU_LOG_DIR / "libexeclog.so"
+QEMU_MASTER_DIR = QEMU_LOG_DIR / "build" / "master"
+QEMU_PLUGIN = QEMU_MASTER_DIR / "libexeclog.so"
 
 QEMU_BINS = {
-    "arm64": QEMU_LOG_DIR / "qemu-aarch64",
-    "riscv64": QEMU_LOG_DIR / "qemu-riscv64",
+    "arm64": QEMU_MASTER_DIR / "qemu-aarch64",
+    "riscv64": QEMU_MASTER_DIR / "qemu-riscv64",
 }
 
 sys.path.insert(0, str(ROOT / "src"))

@@ -144,6 +144,7 @@ class InstructionDB:
                     virtual_address = mem_op.get("virtual_address")
                     physical_address = mem_op.get("physical_address")
                     data_length = mem_op.get("data_length")
+                    memory_value = mem_op.get("memory_value")
 
                     if (
                         operation_type is None
@@ -163,6 +164,7 @@ class InstructionDB:
                         virtual_address=self._to_hex_text(virtual_address),
                         physical_address=self._to_hex_text(physical_address),
                         data_length=int(data_length),
+                        memory_value=str(memory_value) if memory_value is not None else None,
                     )
                     active_session.add(memory_op)
 
@@ -236,6 +238,7 @@ class InstructionDB:
         virtual_address: int | str,
         physical_address: int | str,
         data_length: int,
+        memory_value: Optional[str] = None,
         session: Optional[Session] = None,
     ):
         """Add a memory operation for an instruction."""
@@ -257,6 +260,7 @@ class InstructionDB:
                 virtual_address=self._to_hex_text(virtual_address),
                 physical_address=self._to_hex_text(physical_address),
                 data_length=int(data_length),
+                memory_value=str(memory_value) if memory_value is not None else None,
             )
             active_session.add(mem_op)
             return mem_op

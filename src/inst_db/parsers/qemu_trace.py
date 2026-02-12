@@ -1,7 +1,8 @@
 """QEMU instruction trace parser for execlog plugin output."""
 
+import re
 from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 
 class QEMUTraceParser:
@@ -20,6 +21,14 @@ class QEMUTraceParser:
       - arm64: always 4-byte fixed-width instructions
       - riscv64: infer 2-byte vs 4-byte by instruction low bits
     """
+
+    _MEMORY_PATTERN = re.compile(
+        r"m=(?P<kind>[LS])(?P<size>\d+),\s*"
+        r"v=0x(?P<value>[0-9a-fA-F?]+),\s*"
+        r"va=0x(?P<va>[0-9a-fA-F]+)"
+        r"(?:,\s*pa=0x(?P<pa>[0-9a-fA-F]+))?"
+        r"(?:,\s*dev=[^,]+)?"
+    )
 
     def __init__(self, trace_file: str, architecture: str = "arm64"):
         """Initialize parser.
@@ -45,12 +54,20 @@ class QEMUTraceParser:
         Yields:
             (pc, instruction_bytes): PC address and instruction bytes in correct byte order
         """
+        for pc, instruction_bytes, _, _ in self.parse_with_details():
+            yield (pc, instruction_bytes)
+
+    def parse_with_details(
+        self,
+    ) -> Iterator[Tuple[int, bytes, Optional[Dict[str, int]], List[dict]]]:
+        """Parse trace file and include memory operations from execlog fields."""
         with open(self.trace_file, "r") as file_obj:
             for line in file_obj:
                 parsed = self._parse_execlog_line(line)
                 if parsed is None:
                     continue
-                yield parsed
+                pc, instruction_bytes, memory_operations = parsed
+                yield (pc, instruction_bytes, None, memory_operations)
 
     def parse_with_registers(
         self,
@@ -60,10 +77,10 @@ class QEMUTraceParser:
         execlog does not include architectural register dumps in this project,
         so register_state is always None.
         """
-        for pc, instruction_bytes in self.parse():
-            yield (pc, instruction_bytes, None)
+        for pc, instruction_bytes, register_state, _ in self.parse_with_details():
+            yield (pc, instruction_bytes, register_state)
 
-    def _parse_execlog_line(self, line: str) -> Optional[Tuple[int, bytes]]:
+    def _parse_execlog_line(self, line: str) -> Optional[Tuple[int, bytes, List[dict]]]:
         text = line.strip()
         if not text:
             return None
@@ -84,7 +101,37 @@ class QEMUTraceParser:
         if instruction_bytes is None:
             return None
 
-        return pc, instruction_bytes
+        memory_operations = self._parse_memory_operations(text)
+        return pc, instruction_bytes, memory_operations
+
+    def _parse_memory_operations(self, text: str) -> List[dict]:
+        memory_operations: List[dict] = []
+
+        for matched in self._MEMORY_PATTERN.finditer(text):
+            kind = matched.group("kind")
+            size_text = matched.group("size")
+            value_text = matched.group("value")
+            va_text = matched.group("va")
+            pa_text = matched.group("pa")
+
+            try:
+                data_length = int(size_text)
+                virtual_address = int(va_text, 16)
+                physical_address = int(pa_text, 16) if pa_text else virtual_address
+            except ValueError:
+                continue
+
+            memory_operations.append(
+                {
+                    "operation_type": "READ" if kind == "L" else "WRITE",
+                    "virtual_address": virtual_address,
+                    "physical_address": physical_address,
+                    "data_length": data_length,
+                    "memory_value": f"0x{value_text.lower()}",
+                }
+            )
+
+        return memory_operations
 
     def _instruction_hex_to_bytes(self, instruction_hex: str) -> Optional[bytes]:
         text = instruction_hex.strip().lower()
@@ -160,7 +207,8 @@ class TraceImporter:
                 pc,
                 instruction_bytes,
                 register_state,
-            ) in self.parser.parse_with_registers():
+                memory_operations,
+            ) in self.parser.parse_with_details():
                 if max_instructions is not None and count >= max_instructions:
                     break
 
@@ -170,6 +218,7 @@ class TraceImporter:
                         instruction_code=instruction_bytes,
                         sequence_id=sequence_id,
                         register_state=register_state,
+                        memory_operations=memory_operations,
                         session=session,
                         flush=False,
                     )
