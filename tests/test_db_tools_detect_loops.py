@@ -12,7 +12,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE instructions (
             sequence_id INTEGER NOT NULL PRIMARY KEY,
-            pc VARCHAR(32) NOT NULL,
+            core_id INTEGER NOT NULL,
+            virtual_pc VARCHAR(32) NOT NULL,
+            physical_pc VARCHAR(32) NOT NULL,
             instruction_code BLOB NOT NULL,
             disassembly VARCHAR NOT NULL
         );
@@ -37,20 +39,28 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_loop_detection_cli_json(tmp_path: Path) -> None:
+def test_loop_detection_is_scoped_per_core(tmp_path: Path) -> None:
     db_path = tmp_path / "loop.db"
     conn = sqlite3.connect(db_path)
     try:
         _create_schema(conn)
-        # loop body PCs: 0x1000,0x1004,0x1008 repeated 3 times
         rows = []
         seq = 1
         for _ in range(3):
-            for pc in (0x1000, 0x1004, 0x1008):
-                rows.append((seq, f"0x{pc:016x}", bytes.fromhex("01000000"), "op"))
-                seq += 1
+            rows.append((seq, 0, "0x0000000000001000", "0x0000000000009000", bytes.fromhex("01000000"), "op"))
+            seq += 1
+            rows.append((seq, 1, "0x0000000000002000", "0x000000000000a000", bytes.fromhex("01000000"), "op"))
+            seq += 1
+            rows.append((seq, 0, "0x0000000000001004", "0x0000000000009004", bytes.fromhex("01000000"), "op"))
+            seq += 1
+            rows.append((seq, 1, "0x0000000000002004", "0x000000000000a004", bytes.fromhex("01000000"), "op"))
+            seq += 1
+
         conn.executemany(
-            "INSERT INTO instructions(sequence_id, pc, instruction_code, disassembly) VALUES(?, ?, ?, ?)",
+            """
+            INSERT INTO instructions(sequence_id, core_id, virtual_pc, physical_pc, instruction_code, disassembly)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
             rows,
         )
         conn.commit()
@@ -79,5 +89,7 @@ def test_loop_detection_cli_json(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     rows = payload["rows"]
     assert rows, payload
-    assert rows[0]["iterations"] >= 3
-
+    core_ids = {row["core_id"] for row in rows}
+    assert 0 in core_ids
+    assert 1 in core_ids
+    assert all(row["iterations"] >= 3 for row in rows)

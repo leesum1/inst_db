@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from typing import Generator, Optional
 import sqlite3
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -75,6 +75,118 @@ class DatabaseManager:
     def init_db(self):
         """Create all database tables."""
         Base.metadata.create_all(bind=self.engine)
+        self._ensure_schema_compatibility()
+
+    def _ensure_schema_compatibility(self) -> None:
+        """Apply lightweight schema compatibility updates for SQLite databases."""
+        if not self.database_url.startswith("sqlite"):
+            return
+
+        inspector = inspect(self.engine)
+        table_names = inspector.get_table_names()
+        if "instructions" not in table_names:
+            return
+
+        instruction_columns = {
+            column["name"] for column in inspector.get_columns("instructions")
+        }
+        has_core_id = "core_id" in instruction_columns
+        has_virtual_pc = "virtual_pc" in instruction_columns
+        has_physical_pc = "physical_pc" in instruction_columns
+        has_legacy_pc = "pc" in instruction_columns
+
+        if not has_core_id:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE instructions "
+                        "ADD COLUMN core_id INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+
+        if not has_virtual_pc:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE instructions "
+                        "ADD COLUMN virtual_pc VARCHAR(32)"
+                    )
+                )
+                if has_legacy_pc:
+                    connection.execute(
+                        text(
+                            "UPDATE instructions SET virtual_pc = pc "
+                            "WHERE virtual_pc IS NULL"
+                        )
+                    )
+
+        if not has_physical_pc:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE instructions "
+                        "ADD COLUMN physical_pc VARCHAR(32)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "UPDATE instructions SET physical_pc = COALESCE(virtual_pc, pc) "
+                        "WHERE physical_pc IS NULL"
+                    )
+                )
+
+        with self.engine.begin() as connection:
+            if has_legacy_pc:
+                connection.execute(
+                    text(
+                        "UPDATE instructions "
+                        "SET virtual_pc = COALESCE(virtual_pc, pc) "
+                        "WHERE virtual_pc IS NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "UPDATE instructions "
+                        "SET physical_pc = COALESCE(physical_pc, virtual_pc, pc) "
+                        "WHERE physical_pc IS NULL"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "UPDATE instructions "
+                        "SET physical_pc = COALESCE(physical_pc, virtual_pc) "
+                        "WHERE physical_pc IS NULL"
+                    )
+                )
+
+        instruction_indexes = {
+            index["name"] for index in inspector.get_indexes("instructions")
+        }
+        if "ix_instructions_core_id" not in instruction_indexes:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS "
+                        "ix_instructions_core_id ON instructions (core_id)"
+                    )
+                )
+        if "ix_instructions_virtual_pc" not in instruction_indexes:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS "
+                        "ix_instructions_virtual_pc ON instructions (virtual_pc)"
+                    )
+                )
+        if "ix_instructions_physical_pc" not in instruction_indexes:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS "
+                        "ix_instructions_physical_pc ON instructions (physical_pc)"
+                    )
+                )
 
     def drop_db(self):
         """Drop all database tables (USE WITH CAUTION)."""

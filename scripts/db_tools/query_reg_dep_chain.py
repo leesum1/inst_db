@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Query register dependency chain for an instruction."""
+"""Query register or memory dependency chain for an instruction."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from common import (
 )
 
 
-SQL_FIND_PREV_WRITERS = """
+SQL_FIND_PREV_WRITERS_SAME_CORE = """
 WITH reads AS (
     SELECT DISTINCT register_name
     FROM register_dependencies
@@ -32,7 +32,9 @@ WITH reads AS (
 candidates AS (
     SELECT
         i.sequence_id,
-        i.pc,
+        i.core_id,
+        i.virtual_pc,
+        i.physical_pc,
         i.disassembly,
         rd.register_name,
         ROW_NUMBER() OVER (
@@ -45,69 +47,174 @@ candidates AS (
     WHERE rd.is_dst = 1
       AND rd.register_name IN (SELECT register_name FROM reads)
       AND i.sequence_id < ?
+      AND i.core_id = ?
 )
-SELECT sequence_id, pc, disassembly, register_name
+SELECT sequence_id, core_id, virtual_pc, physical_pc, disassembly, register_name
 FROM candidates
 WHERE rn = 1
 ORDER BY sequence_id DESC
 """
 
 
-def _build_mem_sql(addr_key: str, has_memory_value: bool) -> str:
-    read_value_expr = "memory_value" if has_memory_value else "NULL"
+def _build_mem_sql(has_memory_value: bool) -> str:
+    read_value_expr = "r.memory_value" if has_memory_value else "NULL"
     write_value_expr = "w.memory_value" if has_memory_value else "NULL"
     return f"""
 WITH reads AS (
     SELECT
-        id AS read_id,
-        instruction_id,
-        {addr_key} AS address,
-        data_length,
-        HEX_TO_INT({addr_key}) AS address_int,
+        r.id AS read_id,
+        r.instruction_id AS read_instruction_id,
+        i_read.core_id AS read_core_id,
+        i_read.virtual_pc AS read_virtual_pc,
+        i_read.physical_pc AS read_physical_pc,
+        r.virtual_address AS read_virtual_address,
+        r.physical_address AS read_physical_address,
+        HEX_TO_INT(r.virtual_address) AS read_virtual_address_int,
+        HEX_TO_INT(r.physical_address) AS read_physical_address_int,
+        r.data_length,
         {read_value_expr} AS read_value
-    FROM memory_operations
-    WHERE instruction_id = ?
-      AND UPPER(operation_type) = 'READ'
+    FROM memory_operations AS r
+    JOIN instructions AS i_read
+      ON i_read.sequence_id = r.instruction_id
+    WHERE r.instruction_id = ?
+      AND UPPER(r.operation_type) = 'READ'
 ),
 candidates AS (
     SELECT
-        r.read_id,
-        r.address,
-        r.data_length,
-        r.read_value,
-        i.sequence_id AS writer_seq,
-        i.pc,
-        i.disassembly,
+        rd.read_id,
+        rd.read_core_id,
+        rd.read_virtual_pc,
+        rd.read_physical_pc,
+        rd.read_virtual_address,
+        rd.read_physical_address,
+        rd.data_length,
+        rd.read_value,
+        i_writer.sequence_id AS writer_seq,
+        i_writer.core_id AS writer_core_id,
+        i_writer.virtual_pc AS writer_virtual_pc,
+        i_writer.physical_pc AS writer_physical_pc,
+        i_writer.disassembly,
         {write_value_expr} AS write_value,
+        CASE
+            WHEN i_writer.core_id = rd.read_core_id THEN 'virtual'
+            ELSE 'physical'
+        END AS address_mode,
+        CASE
+            WHEN i_writer.core_id = rd.read_core_id THEN rd.read_virtual_address
+            ELSE rd.read_physical_address
+        END AS address,
         ROW_NUMBER() OVER (
-            PARTITION BY r.read_id
-            ORDER BY i.sequence_id DESC
+            PARTITION BY rd.read_id
+            ORDER BY i_writer.sequence_id DESC
         ) AS rn
-    FROM reads AS r
+    FROM reads AS rd
     JOIN memory_operations AS w
-      ON r.address_int IS NOT NULL
-     AND HEX_TO_INT(w.{addr_key}) IS NOT NULL
-     AND r.data_length > 0
+      ON rd.data_length > 0
      AND w.data_length > 0
-     AND HEX_TO_INT(w.{addr_key}) < (r.address_int + r.data_length)
-     AND r.address_int < (HEX_TO_INT(w.{addr_key}) + w.data_length)
-    JOIN instructions AS i
-      ON i.sequence_id = w.instruction_id
+     AND HEX_TO_INT(
+            CASE
+                WHEN (
+                    SELECT core_id FROM instructions WHERE sequence_id = w.instruction_id
+                ) = rd.read_core_id THEN w.virtual_address
+                ELSE w.physical_address
+            END
+         ) IS NOT NULL
+     AND CASE
+            WHEN (
+                SELECT core_id FROM instructions WHERE sequence_id = w.instruction_id
+            ) = rd.read_core_id THEN rd.read_virtual_address_int IS NOT NULL
+            ELSE rd.read_physical_address_int IS NOT NULL
+         END
+     AND HEX_TO_INT(
+            CASE
+                WHEN (
+                    SELECT core_id FROM instructions WHERE sequence_id = w.instruction_id
+                ) = rd.read_core_id THEN w.virtual_address
+                ELSE w.physical_address
+            END
+         ) < (
+            CASE
+                WHEN (
+                    SELECT core_id FROM instructions WHERE sequence_id = w.instruction_id
+                ) = rd.read_core_id THEN rd.read_virtual_address_int
+                ELSE rd.read_physical_address_int
+            END
+            + rd.data_length
+         )
+     AND (
+            CASE
+                WHEN (
+                    SELECT core_id FROM instructions WHERE sequence_id = w.instruction_id
+                ) = rd.read_core_id THEN rd.read_virtual_address_int
+                ELSE rd.read_physical_address_int
+            END
+         ) < (
+            HEX_TO_INT(
+                CASE
+                    WHEN (
+                        SELECT core_id FROM instructions WHERE sequence_id = w.instruction_id
+                    ) = rd.read_core_id THEN w.virtual_address
+                    ELSE w.physical_address
+                END
+            )
+            + w.data_length
+         )
+    JOIN instructions AS i_writer
+      ON i_writer.sequence_id = w.instruction_id
     WHERE UPPER(w.operation_type) = 'WRITE'
-      AND w.instruction_id < r.instruction_id
+      AND w.instruction_id < rd.read_instruction_id
 )
 SELECT
     writer_seq,
-    pc,
+    writer_core_id,
+    writer_virtual_pc,
+    writer_physical_pc,
     disassembly,
     address,
     data_length,
     read_value,
-    write_value
+    write_value,
+    address_mode,
+    read_core_id
 FROM candidates
 WHERE rn = 1
 ORDER BY writer_seq DESC
 """
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("db_path", help="Path to SQLite .db file")
+    parser.add_argument("--seq-id", type=int, required=True, help="Root instruction sequence ID")
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "reg", "mem"],
+        default="auto",
+        help="Query engine mode (default: auto)",
+    )
+    parser.add_argument(
+        "--addr-key",
+        choices=["virtual_address", "physical_address"],
+        default="physical_address",
+        help="Legacy address key option (kept for CLI compatibility)",
+    )
+    parser.add_argument(
+        "--reg-query-logic",
+        choices=["load_to_mem", "reg_only"],
+        default="load_to_mem",
+        help="Reg engine traversal logic (default: load_to_mem)",
+    )
+    parser.add_argument(
+        "--reg-mem-cross-core",
+        action="store_true",
+        help="Allow cross-core writers when reg engine auto-switches to mem",
+    )
+    parser.add_argument("--max-depth", type=int, default=10, help="Maximum dependency depth")
+    parser.add_argument("--limit", type=int, default=100, help="Maximum rows to output")
+    parser.add_argument("--tree", action="store_true", help="Emit dependency tree text")
+    parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    parser.add_argument("--verbose", action="store_true", help="Show extra stderr diagnostics")
+    return parser.parse_args()
 
 
 def _get_memory_operations(conn, instruction_id: int) -> list[dict[str, Any]]:
@@ -140,7 +247,10 @@ def _format_memory_summary(memory_operations: list[dict[str, Any]]) -> str:
     for op in memory_operations:
         value_text = f", value={op['memory_value']}" if op.get("memory_value") else ""
         segments.append(
-            f"{op['operation_type']} va={op['virtual_address']} len={op['data_length']}{value_text}"
+            (
+                f"{op['operation_type']} va={op['virtual_address']} "
+                f"pa={op['physical_address']} len={op['data_length']}{value_text}"
+            )
         )
     return "; ".join(segments)
 
@@ -148,14 +258,14 @@ def _format_memory_summary(memory_operations: list[dict[str, Any]]) -> str:
 def _get_root_memory_operations(
     conn: Any,
     seq_id: int,
-    addr_key: str,
     has_memory_value: bool,
 ) -> list[dict[str, Any]]:
     root_mem_sql = (
-        f"""
+        """
         SELECT
             UPPER(operation_type) AS operation_type,
-            {addr_key} AS address,
+            virtual_address,
+            physical_address,
             data_length,
             memory_value
         FROM memory_operations
@@ -163,10 +273,11 @@ def _get_root_memory_operations(
         ORDER BY id ASC
         """
         if has_memory_value
-        else f"""
+        else """
         SELECT
             UPPER(operation_type) AS operation_type,
-            {addr_key} AS address,
+            virtual_address,
+            physical_address,
             data_length,
             NULL AS memory_value
         FROM memory_operations
@@ -178,12 +289,17 @@ def _get_root_memory_operations(
     return [
         {
             "operation_type": row["operation_type"],
-            "address": row["address"],
+            "virtual_address": row["virtual_address"],
+            "physical_address": row["physical_address"],
             "bytes": int(row["data_length"]),
             "value": row["memory_value"],
         }
         for row in rows
     ]
+
+
+def _format_pc_for_row(row: dict[str, Any]) -> str:
+    return str(row.get("virtual_pc"))
 
 
 def _build_reg_tree_text(rows: list[dict[str, Any]], root_instruction: Any, root_seq: int) -> str:
@@ -194,8 +310,10 @@ def _build_reg_tree_text(rows: list[dict[str, Any]], root_instruction: Any, root
     for dep_rows in children.values():
         dep_rows.sort(key=lambda item: int(item["seq_id"]))
 
-    root_label = f"[{root_seq}] {root_instruction['pc']} {root_instruction['disassembly']}"
-
+    root_label = (
+        f"[{root_seq}] core={root_instruction['core_id']} "
+        f"{root_instruction['virtual_pc']} {root_instruction['disassembly']}"
+    )
     lines = [root_label]
 
     def walk(seq_id: int, prefix: str, path: set[int]) -> None:
@@ -205,24 +323,27 @@ def _build_reg_tree_text(rows: list[dict[str, Any]], root_instruction: Any, root
             connector = "└── " if is_last else "├── "
             extension = "    " if is_last else "│   "
             child_seq = int(row["seq_id"])
+            pc_text = _format_pc_for_row(row)
             if row.get("edge_kind") == "mem":
                 label = (
-                    f"[{child_seq}] {row['pc']} {row['disassembly']} "
-                    f"(mem: {row['dep_type']}, addr={row['address']}, len={row['bytes']})"
+                    f"[{child_seq}] core={row['core_id']} {pc_text} {row['disassembly']} "
+                    f"(mem/{row['address_mode']}: {row['dep_type']}, addr={row['address']}, len={row['bytes']})"
                 )
-                if row.get("write_value"):
-                    label += f" [value: {row['write_value']}]"
             else:
-                label = f"[{child_seq}] {row['pc']} {row['disassembly']} (reg: {row['via_register']})"
-                if row.get("memory_summary"):
-                    label += f" [mem: {row['memory_summary']}]"
+                label = (
+                    f"[{child_seq}] core={row['core_id']} {pc_text} {row['disassembly']} "
+                    f"(reg: {row['via_register']})"
+                )
+            memory_summary = row.get("memory_summary")
+            if memory_summary:
+                label += f" | mem: {memory_summary}"
+            if row.get("is_cycle"):
+                label += " [cycle]"
+            lines.append(prefix + connector + label)
 
-            if row.get("is_cycle") or child_seq in path:
-                lines.append(f"{prefix}{connector}{label} [cycle]")
+            if child_seq in path:
                 continue
-
-            lines.append(f"{prefix}{connector}{label}")
-            walk(child_seq, f"{prefix}{extension}", path | {child_seq})
+            walk(child_seq, prefix + extension, path | {child_seq})
 
     walk(root_seq, "", {root_seq})
     return "\n".join(lines)
@@ -236,17 +357,23 @@ def _build_mem_tree_text(rows: list[dict[str, Any]], root_instruction: Any, root
     for dep_rows in children.values():
         dep_rows.sort(key=lambda item: int(item["seq_id"]))
 
-    root_memory_ops = root_instruction.get("root_memory_operations", [])
-    root_segments: list[str] = []
-    for op in root_memory_ops:
-        piece = f"{op['operation_type']} addr={op['address']} len={op['bytes']}"
-        if op.get("value"):
-            piece += f" value={op['value']}"
-        root_segments.append(piece)
+    root_label = (
+        f"[{root_seq}] core={root_instruction['core_id']} "
+        f"{root_instruction['virtual_pc']} {root_instruction['disassembly']}"
+    )
+    root_mem = root_instruction.get("root_memory_operations", [])
+    if root_mem:
+        mem_parts: list[str] = []
+        for op in root_mem:
+            value_text = f", value={op['value']}" if op.get("value") else ""
+            mem_parts.append(
+                (
+                    f"{op['operation_type']} va={op['virtual_address']} "
+                    f"pa={op['physical_address']} len={op['bytes']}{value_text}"
+                )
+            )
+        root_label += " | root-mem: " + "; ".join(mem_parts)
 
-    root_label = f"[{root_seq}] {root_instruction['pc']} {root_instruction['disassembly']}"
-    if root_segments:
-        root_label += f" [root-mem: {'; '.join(root_segments)}]"
     lines = [root_label]
 
     def walk(seq_id: int, prefix: str, path: set[int]) -> None:
@@ -256,64 +383,41 @@ def _build_mem_tree_text(rows: list[dict[str, Any]], root_instruction: Any, root
             connector = "└── " if is_last else "├── "
             extension = "    " if is_last else "│   "
             child_seq = int(row["seq_id"])
+            pc_text = _format_pc_for_row(row)
             label = (
-                f"[{child_seq}] {row['pc']} {row['disassembly']} "
-                f"(dep: {row['dep_type']}, addr={row['address']}, len={row['bytes']})"
+                f"[{child_seq}] core={row['core_id']} {pc_text} {row['disassembly']} "
+                f"(mem/{row['address_mode']}: {row['dep_type']}, addr={row['address']}, len={row['bytes']})"
             )
+            if row.get("read_value"):
+                label += f", read={row['read_value']}"
             if row.get("write_value"):
-                label += f" [value: {row['write_value']}]"
+                label += f", write={row['write_value']}"
+            memory_summary = row.get("memory_summary")
+            if memory_summary:
+                label += f" | mem: {memory_summary}"
+            if row.get("is_cycle"):
+                label += " [cycle]"
+            lines.append(prefix + connector + label)
 
-            if row.get("is_cycle") or child_seq in path:
-                lines.append(f"{prefix}{connector}{label} [cycle]")
+            if child_seq in path:
                 continue
-
-            lines.append(f"{prefix}{connector}{label}")
-            walk(child_seq, f"{prefix}{extension}", path | {child_seq})
+            walk(child_seq, prefix + extension, path | {child_seq})
 
     walk(root_seq, "", {root_seq})
     return "\n".join(lines)
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("db_path", help="Path to SQLite .db file")
-    parser.add_argument("--seq-id", type=int, required=True, help="Root instruction sequence ID")
-    parser.add_argument(
-        "--mode",
-        choices=["auto", "reg", "mem"],
-        default="auto",
-        help="Query engine mode (default: auto)",
-    )
-    parser.add_argument(
-        "--addr-key",
-        choices=["virtual_address", "physical_address"],
-        default="virtual_address",
-        help="Address key for mem engine",
-    )
-    parser.add_argument(
-        "--reg-query-logic",
-        choices=["load_to_mem", "reg_only"],
-        default="load_to_mem",
-        help="Reg engine traversal logic (default: load_to_mem)",
-    )
-    parser.add_argument("--max-depth", type=int, default=10, help="Maximum dependency depth")
-    parser.add_argument("--limit", type=int, default=100, help="Maximum rows to output")
-    parser.add_argument("--tree", action="store_true", help="Emit dependency tree text")
-    parser.add_argument("--json", action="store_true", help="Emit JSON output")
-    parser.add_argument("--verbose", action="store_true", help="Show extra stderr diagnostics")
-    return parser.parse_args()
-
-
 def _query_reg_chain(
     conn: Any,
     seq_id: int,
+    root_core_id: int,
     max_depth: int,
     limit: int,
     reg_query_logic: str,
-    addr_key: str,
     has_memory_value: bool,
+    allow_reg_mem_cross_core: bool,
 ) -> list[dict[str, Any]]:
-    mem_sql = _build_mem_sql(addr_key, has_memory_value)
+    mem_sql = _build_mem_sql(has_memory_value)
     rows: list[dict[str, Any]] = []
     queue: deque[tuple[int, int, set[int], str]] = deque()
     queue.append((seq_id, 0, {seq_id}, "reg"))
@@ -327,6 +431,9 @@ def _query_reg_chain(
             deps = conn.execute(mem_sql, (current_seq,)).fetchall()
             for dep in deps:
                 child_seq = int(dep["writer_seq"])
+                writer_core_id = int(dep["writer_core_id"])
+                if not allow_reg_mem_cross_core and writer_core_id != root_core_id:
+                    continue
                 is_cycle = child_seq in path
                 memory_operations = _get_memory_operations(conn, child_seq)
                 rows.append(
@@ -341,7 +448,10 @@ def _query_reg_chain(
                         "bytes": dep["data_length"],
                         "read_value": dep["read_value"],
                         "write_value": dep["write_value"],
-                        "pc": dep["pc"],
+                        "address_mode": dep["address_mode"],
+                        "core_id": writer_core_id,
+                        "virtual_pc": dep["writer_virtual_pc"],
+                        "physical_pc": dep["writer_physical_pc"],
                         "disassembly": dep["disassembly"],
                         "memory_operations": memory_operations,
                         "memory_summary": _format_memory_summary(memory_operations),
@@ -354,18 +464,18 @@ def _query_reg_chain(
                     queue.append((child_seq, depth + 1, path | {child_seq}, "mem"))
             continue
 
-        deps = conn.execute(SQL_FIND_PREV_WRITERS, (current_seq, current_seq)).fetchall()
+        deps = conn.execute(
+            SQL_FIND_PREV_WRITERS_SAME_CORE,
+            (current_seq, current_seq, root_core_id),
+        ).fetchall()
         for dep in deps:
             child_seq = int(dep["sequence_id"])
             is_cycle = child_seq in path
             memory_operations = _get_memory_operations(conn, child_seq)
-            child_has_read_mem = any(
-                str(op.get("operation_type", "")).upper() == "READ"
-                for op in memory_operations
-            )
+            child_has_memory_ops = bool(memory_operations)
             next_mode = (
                 "mem"
-                if reg_query_logic == "load_to_mem" and child_has_read_mem
+                if reg_query_logic == "load_to_mem" and child_has_memory_ops
                 else "reg"
             )
             rows.append(
@@ -380,7 +490,10 @@ def _query_reg_chain(
                     "bytes": None,
                     "read_value": None,
                     "write_value": None,
-                    "pc": dep["pc"],
+                    "address_mode": "virtual",
+                    "core_id": int(dep["core_id"]),
+                    "virtual_pc": dep["virtual_pc"],
+                    "physical_pc": dep["physical_pc"],
                     "disassembly": dep["disassembly"],
                     "memory_operations": memory_operations,
                     "memory_summary": _format_memory_summary(memory_operations),
@@ -400,10 +513,9 @@ def _query_mem_chain(
     seq_id: int,
     max_depth: int,
     limit: int,
-    addr_key: str,
     has_memory_value: bool,
 ) -> list[dict[str, Any]]:
-    sql = _build_mem_sql(addr_key, has_memory_value)
+    sql = _build_mem_sql(has_memory_value)
 
     rows: list[dict[str, Any]] = []
     queue: deque[tuple[int, int, set[int]]] = deque()
@@ -418,6 +530,7 @@ def _query_mem_chain(
         for dep in deps:
             writer_seq = int(dep["writer_seq"])
             is_cycle = writer_seq in path
+            memory_operations = _get_memory_operations(conn, writer_seq)
             rows.append(
                 {
                     "depth": depth + 1,
@@ -428,8 +541,13 @@ def _query_mem_chain(
                     "bytes": dep["data_length"],
                     "read_value": dep["read_value"],
                     "write_value": dep["write_value"],
-                    "pc": dep["pc"],
+                    "address_mode": dep["address_mode"],
+                    "core_id": int(dep["writer_core_id"]),
+                    "virtual_pc": dep["writer_virtual_pc"],
+                    "physical_pc": dep["writer_physical_pc"],
                     "disassembly": dep["disassembly"],
+                    "memory_operations": memory_operations,
+                    "memory_summary": _format_memory_summary(memory_operations),
                     "is_cycle": is_cycle,
                 }
             )
@@ -447,22 +565,22 @@ def _query_chain(
     max_depth: int,
     limit: int,
     mode: str,
-    addr_key: str,
     reg_query_logic: str,
-) -> tuple[list[dict[str, Any]], Any | None, str, bool, str]:
+    reg_mem_cross_core: bool,
+) -> tuple[list[dict[str, Any]], Any | None, str, bool, str, int | None, bool]:
     conn = connect_db(db_path)
     try:
         validate_schema(conn)
 
         root_instruction = fetch_instruction(conn, seq_id)
         if root_instruction is None:
-            return [], None, "reg", False, reg_query_logic
+            return [], None, "reg", False, reg_query_logic, None, reg_mem_cross_core
 
+        root_core_id = int(root_instruction["core_id"])
         has_memory_value = has_column(conn, "memory_operations", "memory_value")
         root_memory_operations = _get_root_memory_operations(
             conn,
             seq_id,
-            addr_key,
             has_memory_value,
         )
         root_has_memory = bool(root_memory_operations)
@@ -477,23 +595,39 @@ def _query_chain(
                 seq_id,
                 max_depth,
                 limit,
-                addr_key,
                 has_memory_value,
             )
             root_payload = dict(root_instruction)
             root_payload["root_memory_operations"] = root_memory_operations
-            return rows, root_payload, "mem", root_has_memory, reg_query_logic
+            return (
+                rows,
+                root_payload,
+                "mem",
+                root_has_memory,
+                reg_query_logic,
+                root_core_id,
+                reg_mem_cross_core,
+            )
 
         rows = _query_reg_chain(
             conn,
             seq_id,
+            root_core_id,
             max_depth,
             limit,
             reg_query_logic,
-            addr_key,
             has_memory_value,
+            reg_mem_cross_core,
         )
-        return rows, dict(root_instruction), "reg", root_has_memory, reg_query_logic
+        return (
+            rows,
+            dict(root_instruction),
+            "reg",
+            root_has_memory,
+            reg_query_logic,
+            root_core_id,
+            reg_mem_cross_core,
+        )
     finally:
         conn.close()
 
@@ -511,14 +645,22 @@ def main() -> int:
         return EXIT_BAD_ARGS
 
     try:
-        rows, root_instruction, engine, root_has_memory, reg_query_logic = _query_chain(
+        (
+            rows,
+            root_instruction,
+            engine,
+            root_has_memory,
+            reg_query_logic,
+            root_core_id,
+            reg_mem_cross_core,
+        ) = _query_chain(
             args.db_path,
             args.seq_id,
             args.max_depth,
             args.limit,
             args.mode,
-            args.addr_key,
             args.reg_query_logic,
+            args.reg_mem_cross_core,
         )
 
         if args.json:
@@ -530,6 +672,9 @@ def main() -> int:
                         "reg_query_logic": reg_query_logic,
                         "auto_switched": args.mode == "auto" and engine == "mem",
                         "root_has_memory": root_has_memory,
+                        "root_core_id": root_core_id,
+                        "addr_key": "mixed(core-aware)",
+                        "reg_mem_cross_core": reg_mem_cross_core,
                     },
                     "rows": rows,
                     "count": len(rows),
@@ -551,12 +696,16 @@ def main() -> int:
                         "parent_seq",
                         "seq_id",
                         "dep_type",
+                        "address_mode",
                         "address",
                         "bytes",
                         "read_value",
                         "write_value",
-                        "pc",
+                        "core_id",
+                        "virtual_pc",
+                        "physical_pc",
                         "disassembly",
+                        "memory_summary",
                         "is_cycle",
                     ],
                     False,
@@ -571,9 +720,12 @@ def main() -> int:
                         "edge_kind",
                         "via_register",
                         "dep_type",
+                        "address_mode",
                         "address",
                         "bytes",
-                        "pc",
+                        "core_id",
+                        "virtual_pc",
+                        "physical_pc",
                         "disassembly",
                         "memory_summary",
                         "is_cycle",

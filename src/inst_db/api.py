@@ -60,6 +60,15 @@ class InstructionDB:
         return f"0x{value:016x}"
 
     @staticmethod
+    def _to_int_address(value: int | str) -> int:
+        if isinstance(value, int):
+            return value
+        text = value.strip().lower()
+        if text.startswith("0x"):
+            return int(text, 16)
+        return int(text, 16)
+
+    @staticmethod
     def _extract_sqlite_path(database_url: str) -> Optional[str]:
         if database_url.startswith("sqlite:////"):
             return database_url.replace("sqlite:////", "/", 1)
@@ -69,13 +78,16 @@ class InstructionDB:
 
     def add_instruction(
         self,
-        pc: int,
-        instruction_code: bytes,
-        sequence_id: int,
+        pc: int | str | None = None,
+        instruction_code: bytes | None = None,
+        sequence_id: int | None = None,
+        core_id: int = 0,
         register_state: Optional[dict] = None,
         memory_operations: Optional[List[dict]] = None,
         session: Optional[Session] = None,
         flush: bool = True,
+        virtual_pc: int | str | None = None,
+        physical_pc: int | str | None = None,
     ) -> Instruction:
         """
         Add a new instruction to the database with automatic register dependency extraction.
@@ -84,25 +96,43 @@ class InstructionDB:
         and writes (including implicit ones).
 
         Args:
-            pc: Program counter address
+            pc: Backward-compatible alias for virtual_pc
             instruction_code: Raw instruction bytes (usually 4 bytes for ARM64)
             sequence_id: Sequential order of execution
+            virtual_pc: Virtual program counter address
+            physical_pc: Physical program counter address (defaults to virtual_pc)
 
         Returns:
             Created Instruction object with register dependencies
         """
+        if instruction_code is None:
+            raise ValueError("instruction_code is required")
+        if sequence_id is None:
+            raise ValueError("sequence_id is required")
+
+        if virtual_pc is None:
+            virtual_pc = pc
+        if virtual_pc is None:
+            raise ValueError("virtual_pc is required")
+        if physical_pc is None:
+            physical_pc = virtual_pc
+
+        virtual_pc_int = self._to_int_address(virtual_pc)
+
         # Disassemble and extract register semantics
-        disasm_result = self.disassembler.disassemble(instruction_code, pc)
+        disasm_result = self.disassembler.disassemble(instruction_code, virtual_pc_int)
         disassembly = disasm_result.full_text if disasm_result else "unknown"
         regs_read = disasm_result.regs_read if disasm_result else set()
         regs_write = disasm_result.regs_write if disasm_result else set()
 
         def add_with_session(active_session: Session) -> Instruction:
             instruction = Instruction(
-                pc=self._to_hex_text(pc),
+                virtual_pc=self._to_hex_text(virtual_pc),
+                physical_pc=self._to_hex_text(physical_pc),
                 instruction_code=instruction_code,
                 disassembly=disassembly,
                 sequence_id=sequence_id,
+                core_id=core_id,
             )
             active_session.add(instruction)
 
@@ -146,14 +176,13 @@ class InstructionDB:
                     data_length = mem_op.get("data_length")
                     memory_value = mem_op.get("memory_value")
 
-                    if (
-                        operation_type is None
-                        or virtual_address is None
-                        or physical_address is None
-                    ):
+                    if operation_type is None or virtual_address is None:
                         raise ValueError(
                             "Memory operation requires type, virtual address, and physical address"
                         )
+
+                    if physical_address is None:
+                        physical_address = virtual_address
 
                     if data_length is None:
                         raise ValueError("Memory operation requires data_length")
@@ -236,8 +265,8 @@ class InstructionDB:
         sequence_id: int,
         operation_type: str,
         virtual_address: int | str,
-        physical_address: int | str,
-        data_length: int,
+        physical_address: int | str | None = None,
+        data_length: int = 0,
         memory_value: Optional[str] = None,
         session: Optional[Session] = None,
     ):
@@ -254,11 +283,16 @@ class InstructionDB:
                     f"Instruction with sequence_id {sequence_id} not found"
                 )
 
+            if physical_address is None:
+                resolved_physical_address: int | str = virtual_address
+            else:
+                resolved_physical_address = physical_address
+
             mem_op = MemoryOperation(
                 instruction=instruction,
                 operation_type=str(operation_type),
                 virtual_address=self._to_hex_text(virtual_address),
-                physical_address=self._to_hex_text(physical_address),
+                physical_address=self._to_hex_text(resolved_physical_address),
                 data_length=int(data_length),
                 memory_value=str(memory_value) if memory_value is not None else None,
             )
@@ -283,7 +317,7 @@ class InstructionDB:
         """Get instruction by program counter."""
         pc_text = self._to_hex_text(pc)
         with self.db_manager.get_session() as session:
-            instruction = session.query(Instruction).filter_by(pc=pc_text).first()
+            instruction = session.query(Instruction).filter_by(virtual_pc=pc_text).first()
             return instruction
 
     def get_register_dependency_by_instruction(
@@ -318,7 +352,7 @@ class InstructionDB:
             if order_by_sequence:
                 query = query.order_by(Instruction.sequence_id)
             else:
-                query = query.order_by(Instruction.pc)
+                query = query.order_by(Instruction.virtual_pc)
             instructions = query.all()
             # Detach from session by converting to dict
             return instructions

@@ -22,7 +22,9 @@ inst_db/
 
 ### instructions
 - `sequence_id` (INTEGER, PK) - 指令执行序列号
-- `pc` (TEXT, hex string, 例如 "0x0000000000400580")
+- `core_id` (INTEGER) - 核/线程 ID
+- `virtual_pc` (TEXT, hex string, 例如 "0x0000000000400580")
+- `physical_pc` (TEXT, hex string)
 - `instruction_code` (BLOB)
 - `disassembly` (TEXT)
 
@@ -45,7 +47,8 @@ from inst_db.api import InstructionDB
 db = InstructionDB("sqlite:///trace.db")
 
 instr = db.add_instruction(
-  pc=0x400580,
+  virtual_pc=0x400580,
+  # 如果未提供 physical_pc，默认 physical_pc=virtual_pc
   instruction_code=bytes.fromhex("a00080d2"),
   sequence_id=1,
 )
@@ -83,6 +86,9 @@ python scripts/runners/run_qemu_trace.py sve
 # 运行 RISC-V 最小演示的跟踪
 python scripts/runners/run_qemu_trace.py riscv_min
 
+# 运行多线程（pthread）演示的跟踪
+python scripts/runners/run_qemu_trace.py pthread
+
 # 跳过构建，只运行跟踪和导入
 python scripts/runners/run_qemu_trace.py qsort --no-build
 
@@ -94,7 +100,7 @@ python scripts/runners/run_qemu_trace.py qsort --no-stats
 ```
 
 参数说明：
-- `qsort|sve|riscv_min` - 选择要运行的演示程序
+- `qsort|sve|riscv_min|pthread` - 选择要运行的演示程序
 - `--no-build` - 跳过二进制文件构建
 - `--no-trace` - 跳过 QEMU 跟踪执行
 - `--no-import` - 跳过导入到数据库
@@ -132,8 +138,11 @@ uv run python scripts/db_tools/query_mem_dep_chain.py tmp/quicksort_trace.db --s
 # 3) 指令自修改检测（地址命中 + 字节变化）
 uv run python scripts/db_tools/query_self_modifying.py tmp/quicksort_trace.db --window 2000
 
-# 4) Loop 检测（重复窗口 + 回边混合）
+# 4) Loop 检测（按 core_id 分组）
 uv run python scripts/db_tools/detect_loops.py tmp/quicksort_trace.db --min-iter 3 --min-body 2 --max-body 64
+
+# 5) 跨核内存冲突检测（窗口内 WRITE/WRITE 与 WRITE/READ）
+uv run python scripts/db_tools/detect_cross_core_memory_conflicts.py tmp/quicksort_trace.db --window 2000
 ```
 
 常用参数：

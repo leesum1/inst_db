@@ -21,7 +21,9 @@ class Instruction(Base):
     __tablename__ = "instructions"
 
     sequence_id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
-    pc: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    core_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    virtual_pc: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    physical_pc: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     instruction_code: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)  # Raw bytes
     disassembly: Mapped[str] = mapped_column(String, nullable=False)  # Disassembled text (e.g., "mov x0, x1")
 
@@ -41,8 +43,18 @@ class Instruction(Base):
     def __repr__(self) -> str:
         return (
             f"<Instruction(sequence_id={self.sequence_id}, "
-            f"pc=0x{self.pc:x}, disassembly='{self.disassembly}')>"
+            f"virtual_pc={self.virtual_pc}, physical_pc={self.physical_pc}, "
+            f"disassembly='{self.disassembly}')>"
         )
+
+    @property
+    def pc(self) -> str:
+        """Backward-compatible alias for virtual PC."""
+        return self.virtual_pc
+
+    @pc.setter
+    def pc(self, value: str) -> None:
+        self.virtual_pc = value
 
 
 class RegisterDependency(Base):

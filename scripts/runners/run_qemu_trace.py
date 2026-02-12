@@ -59,6 +59,17 @@ DEMOS = {
         "compile_flags": ["-march=rv64gc", "-mabi=lp64d"],
         "qemu_flags": [],
     },
+    "pthread": {
+        "name": "PThread",
+        "architecture": "arm64",
+        "src_file": "pthread_demo.c",
+        "bin_file": "pthread_demo",
+        "trace_file": "pthread_execlog.log",
+        "db_file": "pthread_trace.db",
+        "compiler": "aarch64-linux-gnu-gcc",
+        "compile_flags": ["-pthread"],
+        "qemu_flags": [],
+    },
 }
 
 

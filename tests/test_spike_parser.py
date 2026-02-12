@@ -59,9 +59,24 @@ class TestSpikeCommitLogParser:
             parser = SpikeCommitLogParser(trace_path)
             parsed = list(parser.parse())
             assert len(parsed) == 1
-            _, _, reg_state = parsed[0]
+            _, _, _, reg_state = parsed[0]
             assert reg_state is not None
             assert reg_state["x3"] == 0
+        finally:
+            Path(trace_path).unlink()
+
+    def test_parse_extracts_core_id(self):
+        content = "core   9: 0x0000000080000000 (0x00000513) addi a0, zero, 0\n"
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write(content)
+            trace_path = f.name
+
+        try:
+            parser = SpikeCommitLogParser(trace_path)
+            parsed = list(parser.parse())
+            assert len(parsed) == 1
+            assert parsed[0][2] == 9
         finally:
             Path(trace_path).unlink()
 
@@ -70,8 +85,8 @@ class TestSpikeTraceImporter:
     def test_import_spike_trace(self):
         content = (
             "core   0: 0x0000000080000000 (0x00000513) addi a0, zero, 0\n"
-            "core   0: 0x0000000080000004 (0x00100593) addi a1, zero, 1\n"
-            "core   0: 0x0000000080000008 (0x0001) c.nop\n"
+            "core   1: 0x0000000080000004 (0x00100593) addi a1, zero, 1\n"
+            "core   2: 0x0000000080000008 (0x0001) c.nop\n"
         )
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
@@ -91,6 +106,9 @@ class TestSpikeTraceImporter:
             assert len(instructions) == 3
             assert instructions[0].pc == "0x0000000080000000"
             assert instructions[1].pc == "0x0000000080000004"
+            assert instructions[0].core_id == 0
+            assert instructions[1].core_id == 1
+            assert instructions[2].core_id == 2
             assert ("addi" in instructions[0].disassembly) or (
                 "mv" in instructions[0].disassembly
             )

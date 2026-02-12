@@ -1,4 +1,4 @@
-"""CLI tests for self-modifying instruction query tool."""
+"""CLI tests for cross-core memory conflict detection tool."""
 
 import json
 import sqlite3
@@ -39,8 +39,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_self_modifying_cross_core_uses_physical_pc(tmp_path: Path) -> None:
-    db_path = tmp_path / "self_mod_cross_core.db"
+def test_cross_core_conflicts_detects_write_write_and_write_read(tmp_path: Path) -> None:
+    db_path = tmp_path / "cross_core_conflicts.db"
     conn = sqlite3.connect(db_path)
     try:
         _create_schema(conn)
@@ -50,16 +50,21 @@ def test_self_modifying_cross_core_uses_physical_pc(tmp_path: Path) -> None:
             VALUES(?, ?, ?, ?, ?, ?)
             """,
             [
-                (1, 0, "0x0000000000001000", "0x000000000000a000", bytes.fromhex("aaaaaaaa"), "str w0, [x1]"),
-                (2, 1, "0x0000000000002000", "0x0000000000003000", bytes.fromhex("11223344"), "nop"),
+                (1, 0, "0x0000000000001000", "0x0000000000009000", bytes.fromhex("01000000"), "str"),
+                (2, 1, "0x0000000000001004", "0x0000000000009004", bytes.fromhex("02000000"), "str"),
+                (3, 2, "0x0000000000001008", "0x0000000000009008", bytes.fromhex("03000000"), "ldr"),
             ],
         )
-        conn.execute(
+        conn.executemany(
             """
             INSERT INTO memory_operations(instruction_id, operation_type, virtual_address, physical_address, data_length, memory_value)
             VALUES(?, ?, ?, ?, ?, ?)
             """,
-            (1, "WRITE", "0x0000000000002000", "0x0000000000003000", 4, "0x00000000deadbeef"),
+            [
+                (1, "WRITE", "0x0000000000002000", "0x0000000000005000", 8, "0x01"),
+                (2, "WRITE", "0x0000000000003000", "0x0000000000005004", 8, "0x02"),
+                (3, "READ", "0x0000000000004000", "0x0000000000005002", 4, "0x03"),
+            ],
         )
         conn.commit()
     finally:
@@ -68,11 +73,11 @@ def test_self_modifying_cross_core_uses_physical_pc(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
-            "scripts/db_tools/query_self_modifying.py",
+            "scripts/db_tools/detect_cross_core_memory_conflicts.py",
             str(db_path),
-            "--json",
             "--window",
-            "10",
+            "5",
+            "--json",
         ],
         capture_output=True,
         text=True,
@@ -82,16 +87,13 @@ def test_self_modifying_cross_core_uses_physical_pc(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     rows = payload["rows"]
-    assert rows, payload
-    assert rows[0]["writer_core_id"] == 0
-    assert rows[0]["target_core_id"] == 1
-    assert rows[0]["address_mode"] == "physical"
-    assert rows[0]["writer_seq"] == 1
-    assert rows[0]["target_seq"] == 2
+    event_types = {row["event_type"] for row in rows}
+    assert "cross_core_write_write" in event_types
+    assert "cross_core_write_then_read" in event_types
 
 
-def test_self_modifying_same_core_uses_virtual_pc(tmp_path: Path) -> None:
-    db_path = tmp_path / "self_mod_same_core.db"
+def test_cross_core_conflicts_respects_window_boundary(tmp_path: Path) -> None:
+    db_path = tmp_path / "cross_core_conflicts_window.db"
     conn = sqlite3.connect(db_path)
     try:
         _create_schema(conn)
@@ -101,16 +103,21 @@ def test_self_modifying_same_core_uses_virtual_pc(tmp_path: Path) -> None:
             VALUES(?, ?, ?, ?, ?, ?)
             """,
             [
-                (1, 0, "0x0000000000001000", "0x000000000000a000", bytes.fromhex("aaaaaaaa"), "str w0, [x1]"),
-                (2, 0, "0x0000000000003000", "0x000000000000f000", bytes.fromhex("11223344"), "nop"),
+                (1, 0, "0x0000000000001000", "0x0000000000009000", bytes.fromhex("01000000"), "str"),
+                (4, 1, "0x0000000000001004", "0x0000000000009004", bytes.fromhex("02000000"), "ldr"),
+                (5, 1, "0x0000000000001008", "0x0000000000009008", bytes.fromhex("03000000"), "ldr"),
             ],
         )
-        conn.execute(
+        conn.executemany(
             """
             INSERT INTO memory_operations(instruction_id, operation_type, virtual_address, physical_address, data_length, memory_value)
             VALUES(?, ?, ?, ?, ?, ?)
             """,
-            (1, "WRITE", "0x0000000000003000", "0x0000000000009999", 4, "0x00000000deadbeef"),
+            [
+                (1, "WRITE", "0x0000000000002000", "0x0000000000005000", 8, "0x01"),
+                (4, "READ", "0x0000000000003000", "0x0000000000005000", 8, "0x02"),
+                (5, "READ", "0x0000000000003008", "0x0000000000005000", 8, "0x03"),
+            ],
         )
         conn.commit()
     finally:
@@ -119,11 +126,11 @@ def test_self_modifying_same_core_uses_virtual_pc(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
-            "scripts/db_tools/query_self_modifying.py",
+            "scripts/db_tools/detect_cross_core_memory_conflicts.py",
             str(db_path),
-            "--json",
             "--window",
-            "10",
+            "3",
+            "--json",
         ],
         capture_output=True,
         text=True,
@@ -133,6 +140,5 @@ def test_self_modifying_same_core_uses_virtual_pc(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     rows = payload["rows"]
-    assert rows, payload
-    assert rows[0]["address_mode"] == "virtual"
-    assert rows[0]["target_virtual_pc"] == "0x0000000000003000"
+    assert any(row["first_seq"] == 1 and row["second_seq"] == 4 for row in rows)
+    assert not any(row["first_seq"] == 1 and row["second_seq"] == 5 for row in rows)

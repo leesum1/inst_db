@@ -9,7 +9,9 @@ class SpikeCommitLogParser:
     """Parse Spike `--log-commits` text output."""
 
     _INSTRUCTION_PATTERNS = (
-        re.compile(r"^\s*core\s+\d+:\s*0x([0-9a-fA-F]+)\s*\(0x([0-9a-fA-F]+)\)"),
+        re.compile(
+            r"^\s*core\s+(\d+):\s*0x([0-9a-fA-F]+)\s*\(0x([0-9a-fA-F]+)\)"
+        ),
         re.compile(r"^\s*0x([0-9a-fA-F]+)\s*\(0x([0-9a-fA-F]+)\)"),
     )
 
@@ -40,7 +42,7 @@ class SpikeCommitLogParser:
     def _normalize_reg_name(index: int) -> str:
         return f"x{index}"
 
-    def parse(self) -> Iterator[Tuple[int, bytes, Optional[Dict[str, int]]]]:
+    def parse(self) -> Iterator[Tuple[int, bytes, int, Optional[Dict[str, int]]]]:
         with open(self.trace_file, "r") as f:
             lines = f.readlines()
 
@@ -57,8 +59,14 @@ class SpikeCommitLogParser:
                 i += 1
                 continue
 
-            pc = int(matched.group(1), 16)
-            instruction_bytes = self._to_instruction_bytes(matched.group(2))
+            if line.startswith("core"):
+                core_id = int(matched.group(1))
+                pc = int(matched.group(2), 16)
+                instruction_bytes = self._to_instruction_bytes(matched.group(3))
+            else:
+                core_id = 0
+                pc = int(matched.group(1), 16)
+                instruction_bytes = self._to_instruction_bytes(matched.group(2))
             i += 1
 
             if instruction_bytes is None:
@@ -76,7 +84,7 @@ class SpikeCommitLogParser:
                 i += 1
 
             reg_state = registers if registers else None
-            yield (pc, instruction_bytes, reg_state)
+            yield (pc, instruction_bytes, core_id, reg_state)
 
 
 class SpikeTraceImporter:
@@ -99,15 +107,17 @@ class SpikeTraceImporter:
         sequence_id = 1
 
         with db.db_manager.get_session() as session:
-            for pc, instruction_bytes, register_state in self.parser.parse():
+            for pc, instruction_bytes, core_id, register_state in self.parser.parse():
                 if max_instructions is not None and count >= max_instructions:
                     break
 
                 try:
                     db.add_instruction(
-                        pc=pc,
+                        virtual_pc=pc,
+                        physical_pc=pc,
                         instruction_code=instruction_bytes,
                         sequence_id=sequence_id,
+                        core_id=core_id,
                         register_state=register_state,
                         session=session,
                         flush=False,

@@ -35,6 +35,22 @@ class TestQEMUExeclogParser:
         finally:
             Path(trace_file).unlink()
 
+    def test_parse_with_details_extracts_core_id(self):
+        trace_content = '7, 0x400580, 0xd503201f, "nop"\n'
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write(trace_content)
+            trace_file = f.name
+
+        try:
+            parser = QEMUTraceParser(trace_file, architecture="arm64")
+            results = list(parser.parse_with_details())
+
+            assert len(results) == 1
+            assert results[0][3] == 7
+        finally:
+            Path(trace_file).unlink()
+
     def test_parse_riscv_execlog_file(self):
         trace_content = """0, 0x1038c, 0x24000ef, \"jal ra,36\"
 0, 0x10390, 0x87aa, \"mv a5,a0\"
@@ -116,8 +132,9 @@ malformed, line
             assert len(results) == 3
             assert results[0][0] == 0x400590
             assert results[0][1].hex() == "e10340f9"
-            assert results[0][2] is None
-            assert results[0][3] == [
+            assert results[0][2] == 0x400590
+            assert results[0][3] == 0
+            assert results[0][4] == [
                 {
                     "operation_type": "READ",
                     "virtual_address": 0x7F3DD3FA1130,
@@ -126,7 +143,7 @@ malformed, line
                     "memory_value": "0x0000000000000001",
                 }
             ]
-            assert results[1][3] == [
+            assert results[1][4] == [
                 {
                     "operation_type": "WRITE",
                     "virtual_address": 0x7F3DD3FA10A0,
@@ -142,7 +159,7 @@ malformed, line
                     "memory_value": "0x00000000000000aa",
                 },
             ]
-            assert results[2][3] == []
+            assert results[2][4] == []
         finally:
             Path(trace_file).unlink()
 
@@ -177,6 +194,33 @@ class TestTraceImporter:
             assert instructions[1].pc == "0x0000000000400584"
             assert instructions[2].pc == "0x0000000000400588"
             assert "mov" in instructions[0].disassembly
+            assert instructions[0].core_id == 0
+        finally:
+            Path(trace_file).unlink()
+            Path(db_file).unlink()
+
+    def test_import_arm64_trace_persists_core_id(self):
+        trace_content = """2, 0x400580, 0xd28000a0, \"mov x0, #5\"
+1, 0x400584, 0xd2800141, \"mov x1, #10\"
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write(trace_content)
+            trace_file = f.name
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_file = f.name
+
+        try:
+            importer = TraceImporter(trace_file, db_file, architecture="arm64")
+            count = importer.import_trace()
+            assert count == 2
+
+            db = InstructionDB(f"sqlite:///{db_file}", architecture="arm64")
+            instructions = db.get_instruction_trace()
+            assert len(instructions) == 2
+            assert instructions[0].core_id == 2
+            assert instructions[1].core_id == 1
         finally:
             Path(trace_file).unlink()
             Path(db_file).unlink()

@@ -14,7 +14,14 @@ EXIT_SCHEMA_ERROR = 3
 EXIT_RUNTIME_ERROR = 4
 
 REQUIRED_COLUMNS = {
-    "instructions": {"sequence_id", "pc", "instruction_code", "disassembly"},
+    "instructions": {
+        "sequence_id",
+        "core_id",
+        "virtual_pc",
+        "physical_pc",
+        "instruction_code",
+        "disassembly",
+    },
     "register_dependencies": {
         "instruction_id",
         "register_name",
@@ -80,7 +87,7 @@ def normalize_hex(value: int, width: int = 16) -> str:
 def fetch_instruction(conn: sqlite3.Connection, sequence_id: int) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT sequence_id, pc, disassembly, instruction_code
+        SELECT sequence_id, core_id, virtual_pc, physical_pc, disassembly, instruction_code
         FROM instructions
         WHERE sequence_id = ?
         """,
@@ -121,4 +128,3 @@ def emit_rows(rows: list[dict[str, Any]], columns: list[str], as_json: bool) -> 
         print_json({"rows": rows, "count": len(rows)})
     else:
         print_table(rows, columns)
-

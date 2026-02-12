@@ -32,11 +32,21 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_trace(conn) -> list[tuple[int, str]]:
+def _load_trace_by_core(conn) -> dict[int, list[tuple[int, str]]]:
     rows = conn.execute(
-        "SELECT sequence_id, pc FROM instructions ORDER BY sequence_id ASC"
+        """
+        SELECT sequence_id, core_id, virtual_pc
+        FROM instructions
+        ORDER BY sequence_id ASC
+        """
     ).fetchall()
-    return [(int(row["sequence_id"]), str(row["pc"])) for row in rows]
+
+    grouped: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for row in rows:
+        grouped[int(row["core_id"])].append(
+            (int(row["sequence_id"]), str(row["virtual_pc"]))
+        )
+    return dict(grouped)
 
 
 def _detect_repeating_windows(
@@ -52,7 +62,10 @@ def _detect_repeating_windows(
             window = tuple(pcs[idx : idx + body_len])
             iterations = 1
             cursor = idx + body_len
-            while cursor + body_len <= len(pcs) and tuple(pcs[cursor : cursor + body_len]) == window:
+            while (
+                cursor + body_len <= len(pcs)
+                and tuple(pcs[cursor : cursor + body_len]) == window
+            ):
                 iterations += 1
                 cursor += body_len
 
@@ -76,7 +89,9 @@ def _detect_repeating_windows(
 
 
 def _detect_back_edges(trace: list[tuple[int, str]]) -> dict[str, dict[str, Any]]:
-    edges: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "start_seq": None, "end_seq": None})
+    edges: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "start_seq": None, "end_seq": None}
+    )
 
     for idx in range(1, len(trace)):
         prev_seq, prev_pc = trace[idx - 1]
@@ -95,16 +110,17 @@ def _detect_back_edges(trace: list[tuple[int, str]]) -> dict[str, dict[str, Any]
     return {pc: data for pc, data in edges.items() if data["count"] > 0}
 
 
-def _merge_results(
+def _merge_results_for_core(
+    core_id: int,
     windows: dict[tuple[str, ...], dict[str, Any]],
     back_edges: dict[str, dict[str, Any]],
     min_iter: int,
-    limit: int,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    loop_id = 1
 
-    for window_data in sorted(windows.values(), key=lambda item: (-item["iterations"], item["start_seq"])):
+    for window_data in sorted(
+        windows.values(), key=lambda item: (-item["iterations"], item["start_seq"])
+    ):
         header_pc = window_data["header_pc"]
         edge = back_edges.get(header_pc)
         method_flags = ["window"]
@@ -115,7 +131,7 @@ def _merge_results(
 
         rows.append(
             {
-                "loop_id": loop_id,
+                "core_id": core_id,
                 "start_seq": window_data["start_seq"],
                 "end_seq": window_data["end_seq"],
                 "approx_header_pc": header_pc,
@@ -125,18 +141,15 @@ def _merge_results(
                 "confidence": confidence,
             }
         )
-        loop_id += 1
-        if len(rows) >= limit:
-            return rows
 
-    for header_pc, edge in sorted(back_edges.items(), key=lambda item: (-item[1]["count"], item[0])):
-        if len(rows) >= limit:
-            break
+    for header_pc, edge in sorted(
+        back_edges.items(), key=lambda item: (-item[1]["count"], item[0])
+    ):
         if any(row["approx_header_pc"] == header_pc for row in rows):
             continue
         rows.append(
             {
-                "loop_id": loop_id,
+                "core_id": core_id,
                 "start_seq": edge["start_seq"],
                 "end_seq": edge["end_seq"],
                 "approx_header_pc": header_pc,
@@ -146,7 +159,6 @@ def _merge_results(
                 "confidence": "medium",
             }
         )
-        loop_id += 1
 
     return rows
 
@@ -161,12 +173,27 @@ def _detect_loops(
     conn = connect_db(db_path)
     try:
         validate_schema(conn)
-        trace = _load_trace(conn)
-        if not trace:
+        trace_by_core = _load_trace_by_core(conn)
+        if not trace_by_core:
             return []
-        windows = _detect_repeating_windows(trace, min_iter, min_body, max_body)
-        back_edges = _detect_back_edges(trace)
-        return _merge_results(windows, back_edges, min_iter, limit)
+
+        rows: list[dict[str, Any]] = []
+        loop_id = 1
+
+        for core_id in sorted(trace_by_core.keys()):
+            trace = trace_by_core[core_id]
+            if not trace:
+                continue
+            windows = _detect_repeating_windows(trace, min_iter, min_body, max_body)
+            back_edges = _detect_back_edges(trace)
+            core_rows = _merge_results_for_core(core_id, windows, back_edges, min_iter)
+            for row in core_rows:
+                row["loop_id"] = loop_id
+                rows.append(row)
+                loop_id += 1
+
+        rows.sort(key=lambda item: (-item["iterations"], item["core_id"], item["start_seq"]))
+        return rows[:limit]
     finally:
         conn.close()
 
@@ -198,6 +225,7 @@ def main() -> int:
             rows,
             [
                 "loop_id",
+                "core_id",
                 "start_seq",
                 "end_seq",
                 "approx_header_pc",
@@ -221,4 +249,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -23,17 +23,21 @@ from common import (
 SQL_LOAD_WRITES = """
 SELECT
     mo.instruction_id AS writer_seq,
-    mo.virtual_address AS write_addr,
+    i.core_id AS writer_core_id,
+    mo.virtual_address AS write_virtual_addr,
+    mo.physical_address AS write_physical_addr,
     mo.data_length,
     mo.memory_value
 FROM memory_operations AS mo
+JOIN instructions AS i
+  ON i.sequence_id = mo.instruction_id
 WHERE UPPER(mo.operation_type) = 'WRITE'
 ORDER BY mo.instruction_id ASC
 """
 
 
 SQL_LOAD_TARGETS = """
-SELECT sequence_id, pc, instruction_code, disassembly
+SELECT sequence_id, core_id, virtual_pc, physical_pc, instruction_code, disassembly
 FROM instructions
 WHERE sequence_id > ?
   AND sequence_id <= ?
@@ -75,26 +79,36 @@ def _query_self_mod(db_path: str, window: int, limit: int) -> list[dict[str, Any
 
         for write_row in write_rows:
             writer_seq = int(write_row["writer_seq"])
-            write_addr = parse_hex(write_row["write_addr"])
-            if write_addr is None:
-                continue
+            writer_core_id = int(write_row["writer_core_id"])
+            write_virtual_addr = parse_hex(write_row["write_virtual_addr"])
+            write_physical_addr = parse_hex(write_row["write_physical_addr"])
             write_len = int(write_row["data_length"])
             target_upper = writer_seq + window
 
             targets = conn.execute(SQL_LOAD_TARGETS, (writer_seq, target_upper)).fetchall()
             for target in targets:
                 target_seq = int(target["sequence_id"])
-                target_pc_int = parse_hex(target["pc"])
-                if target_pc_int is None:
+                target_core_id = int(target["core_id"])
+                same_core = target_core_id == writer_core_id
+
+                address_mode = "virtual" if same_core else "physical"
+                write_addr_int = write_virtual_addr if same_core else write_physical_addr
+
+                target_pc_text = (
+                    target["virtual_pc"] if same_core else target["physical_pc"]
+                )
+                target_pc_int = parse_hex(target_pc_text)
+
+                if write_addr_int is None or target_pc_int is None:
                     continue
 
                 instruction_code = bytes(target["instruction_code"])
                 inst_len = len(instruction_code)
                 inst_start = target_pc_int
                 inst_end = inst_start + inst_len
-                write_end = write_addr + write_len
+                write_end = write_addr_int + write_len
 
-                overlaps = write_addr < inst_end and write_end > inst_start
+                overlaps = write_addr_int < inst_end and write_end > inst_start
                 if not overlaps:
                     continue
 
@@ -111,9 +125,18 @@ def _query_self_mod(db_path: str, window: int, limit: int) -> list[dict[str, Any
                 rows.append(
                     {
                         "writer_seq": writer_seq,
+                        "writer_core_id": writer_core_id,
                         "target_seq": target_seq,
-                        "target_pc": target["pc"],
-                        "write_addr": write_row["write_addr"],
+                        "target_core_id": target_core_id,
+                        "address_mode": address_mode,
+                        "target_virtual_pc": target["virtual_pc"],
+                        "target_physical_pc": target["physical_pc"],
+                        "target_pc": target_pc_text,
+                        "write_addr": (
+                            write_row["write_virtual_addr"]
+                            if same_core
+                            else write_row["write_physical_addr"]
+                        ),
                         "inst_len": inst_len,
                         "memory_value": memory_value,
                         "old_code_hex": instruction_code.hex(),
@@ -145,7 +168,12 @@ def main() -> int:
             rows,
             [
                 "writer_seq",
+                "writer_core_id",
                 "target_seq",
+                "target_core_id",
+                "address_mode",
+                "target_virtual_pc",
+                "target_physical_pc",
                 "target_pc",
                 "write_addr",
                 "inst_len",
@@ -169,4 +197,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

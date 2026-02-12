@@ -49,25 +49,31 @@ class QEMUTraceParser:
         self.architecture = normalized_arch
 
     def parse(self) -> Iterator[Tuple[int, bytes]]:
-        """Parse trace file and yield (pc, instruction_bytes) tuples.
+        """Parse trace file and yield (virtual_pc, instruction_bytes) tuples.
 
         Yields:
-            (pc, instruction_bytes): PC address and instruction bytes in correct byte order
+            (virtual_pc, instruction_bytes): PC address and instruction bytes in correct byte order
         """
-        for pc, instruction_bytes, _, _ in self.parse_with_details():
-            yield (pc, instruction_bytes)
+        for virtual_pc, instruction_bytes, _, _, _ in self.parse_with_details():
+            yield (virtual_pc, instruction_bytes)
 
     def parse_with_details(
         self,
-    ) -> Iterator[Tuple[int, bytes, Optional[Dict[str, int]], List[dict]]]:
+    ) -> Iterator[Tuple[int, bytes, int, int, List[dict]]]:
         """Parse trace file and include memory operations from execlog fields."""
         with open(self.trace_file, "r") as file_obj:
             for line in file_obj:
                 parsed = self._parse_execlog_line(line)
                 if parsed is None:
                     continue
-                pc, instruction_bytes, memory_operations = parsed
-                yield (pc, instruction_bytes, None, memory_operations)
+                virtual_pc, instruction_bytes, physical_pc, core_id, memory_operations = parsed
+                yield (
+                    virtual_pc,
+                    instruction_bytes,
+                    physical_pc,
+                    core_id,
+                    memory_operations,
+                )
 
     def parse_with_registers(
         self,
@@ -77,10 +83,13 @@ class QEMUTraceParser:
         execlog does not include architectural register dumps in this project,
         so register_state is always None.
         """
-        for pc, instruction_bytes, register_state, _ in self.parse_with_details():
-            yield (pc, instruction_bytes, register_state)
+        for virtual_pc, instruction_bytes, _, _, _ in self.parse_with_details():
+            register_state = None
+            yield (virtual_pc, instruction_bytes, register_state)
 
-    def _parse_execlog_line(self, line: str) -> Optional[Tuple[int, bytes, List[dict]]]:
+    def _parse_execlog_line(
+        self, line: str
+    ) -> Optional[Tuple[int, bytes, int, int, List[dict]]]:
         text = line.strip()
         if not text:
             return None
@@ -89,11 +98,13 @@ class QEMUTraceParser:
         if len(fields) < 3:
             return None
 
+        core_text = fields[0].strip()
         pc_text = fields[1].strip()
         insn_text = fields[2].strip()
 
         try:
-            pc = int(pc_text, 16)
+            core_id = int(core_text, 10)
+            virtual_pc = int(pc_text, 16)
         except ValueError:
             return None
 
@@ -102,7 +113,8 @@ class QEMUTraceParser:
             return None
 
         memory_operations = self._parse_memory_operations(text)
-        return pc, instruction_bytes, memory_operations
+        physical_pc = virtual_pc
+        return virtual_pc, instruction_bytes, physical_pc, core_id, memory_operations
 
     def _parse_memory_operations(self, text: str) -> List[dict]:
         memory_operations: List[dict] = []
@@ -204,9 +216,10 @@ class TraceImporter:
 
         with db.db_manager.get_session() as session:
             for (
-                pc,
+                virtual_pc,
                 instruction_bytes,
-                register_state,
+                physical_pc,
+                core_id,
                 memory_operations,
             ) in self.parser.parse_with_details():
                 if max_instructions is not None and count >= max_instructions:
@@ -214,10 +227,11 @@ class TraceImporter:
 
                 try:
                     db.add_instruction(
-                        pc=pc,
+                        virtual_pc=virtual_pc,
+                        physical_pc=physical_pc,
                         instruction_code=instruction_bytes,
                         sequence_id=sequence_id,
-                        register_state=register_state,
+                        core_id=core_id,
                         memory_operations=memory_operations,
                         session=session,
                         flush=False,
@@ -230,7 +244,9 @@ class TraceImporter:
                         print(f"Imported {count} instructions...")
 
                 except Exception as exc:
-                    print(f"Warning: Failed to import instruction at PC={pc:#x}: {exc}")
+                    print(
+                        f"Warning: Failed to import instruction at PC={virtual_pc:#x}: {exc}"
+                    )
                     continue
 
         if db.db_manager.use_in_memory:

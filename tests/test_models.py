@@ -36,6 +36,18 @@ class TestInstructionDB:
         assert instr.pc == "0x0000000000001000"
         assert instr.sequence_id == 1
         assert instr.instruction_code == bytes.fromhex("20000101aa")
+        assert instr.core_id == 0
+
+    def test_add_instruction_with_core_id(self, temp_db):
+        """Test adding instruction with explicit core ID."""
+        instr = temp_db.add_instruction(
+            pc=0x1000,
+            instruction_code=bytes.fromhex("20000101aa"),
+            sequence_id=1,
+            core_id=3,
+        )
+
+        assert instr.core_id == 3
 
     def test_add_multiple_instructions(self, temp_db):
         """Test adding multiple instructions."""
